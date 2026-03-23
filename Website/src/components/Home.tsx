@@ -170,6 +170,159 @@ const MediaCard = memo(({ item, size = 'normal', onItemClick, onToggleFavorite, 
     prevProps.favoriteIds === nextProps.favoriteIds;
 });
 
+// MyMediaCard component - Landscape card for library folders
+const MyMediaCard = memo(({ item, onClick }: { item: EmbyItem; onClick: (item: EmbyItem) => void }) => {
+  const imageUrl = embyApi.getImageUrl(item.Id, 'Primary', { maxWidth: 400 });
+  const [isHovered, setIsHovered] = useState(false);
+
+  return (
+    <div
+      onClick={() => onClick(item)}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className="flex-shrink-0 w-72 cursor-pointer group/card text-left transition-all duration-300"
+    >
+      <div className={`relative aspect-video bg-gradient-to-br from-gray-800 to-gray-900 rounded-xl mb-3 overflow-hidden shadow-2xl transition-all duration-300 ${
+        isHovered ? 'scale-105 shadow-black/80 ring-2 ring-white/20' : 'shadow-black/40'
+      }`}>
+        {imageUrl ? (
+          <img
+            src={imageUrl}
+            alt={item.Name}
+            className={`w-full h-full object-cover transition-all duration-700 ease-out ${isHovered ? 'scale-110' : 'scale-100'}`}
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-white/5">
+            <span className="text-white font-bold text-xl opacity-50">{item.Name}</span>
+          </div>
+        )}
+        <div className={`absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent transition-opacity duration-300 ${isHovered ? 'opacity-100' : 'opacity-60'}`} />
+        <div className="absolute inset-0 flex flex-col justify-end p-5">
+           <h3 className="text-white font-bold text-lg drop-shadow-lg">{item.Name}</h3>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+const MyMediaRow = memo(({ items, onItemClick, editMode, isHidden, onToggleVisibility, onMoveUp, onMoveDown, canMoveUp, canMoveDown }: {
+  items: EmbyItem[];
+  onItemClick: (item: EmbyItem) => void;
+  editMode?: boolean;
+  isHidden?: boolean;
+  onToggleVisibility?: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
+}) => {
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(true);
+
+  const checkScrollButtons = () => {
+    if (scrollContainerRef.current) {
+      const { scrollLeft, scrollWidth, clientWidth } = scrollContainerRef.current;
+      setCanScrollLeft(scrollLeft > 10);
+      setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 10);
+    }
+  };
+
+  useEffect(() => {
+    checkScrollButtons();
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.addEventListener('scroll', checkScrollButtons);
+      const resizeObserver = new ResizeObserver(checkScrollButtons);
+      resizeObserver.observe(container);
+      return () => {
+        container.removeEventListener('scroll', checkScrollButtons);
+        resizeObserver.disconnect();
+      };
+    }
+  }, [items]);
+
+  const scroll = (direction: 'left' | 'right') => {
+    if (scrollContainerRef.current) {
+      const scrollAmount = scrollContainerRef.current.clientWidth * 0.85;
+      scrollContainerRef.current.scrollBy({
+        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        behavior: 'smooth'
+      });
+    }
+  };
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className={`mb-12 transition-all duration-500 group/row ${isHidden && !editMode ? 'hidden' : ''} ${isHidden ? 'opacity-40' : ''}`}>
+       <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-3 group/title">
+            <div className="p-2 bg-blue-500/20 rounded-lg text-blue-400">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold text-white tracking-tight">My Media</h2>
+            {editMode && (
+              <div className="flex items-center gap-2 ml-4">
+                 <button onClick={onToggleVisibility} className="p-1.5 hover:bg-white/10 rounded-md transition-colors text-white/60 hover:text-white">
+                    {isHidden ? (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88L4.223 4.223m11.291 11.291L21.17 21.17" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
+                    ) : (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /><path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268-2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
+                    )}
+                 </button>
+                 <button onClick={onMoveUp} disabled={!canMoveUp} className="p-1.5 hover:bg-white/10 rounded-md transition-colors text-white/60 hover:text-white disabled:opacity-30"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 15l7-7 7 7" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg></button>
+                 <button onClick={onMoveDown} disabled={!canMoveDown} className="p-1.5 hover:bg-white/10 rounded-md transition-colors text-white/60 hover:text-white disabled:opacity-30"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg></button>
+              </div>
+            )}
+          </div>
+       </div>
+
+       <div className="relative">
+          {canScrollLeft && (
+            <button
+              onClick={() => scroll('left')}
+              className="absolute left-0 top-0 bottom-0 z-20 w-16 bg-gradient-to-r from-black/80 to-transparent flex items-center justify-start pl-2 opacity-0 group-hover/row:opacity-100 transition-opacity duration-300 hover:from-black/90"
+              aria-label="Scroll left"
+            >
+              <div className="w-10 h-10 rounded-full bg-black/60 hover:bg-black/80 flex items-center justify-center backdrop-blur-sm">
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M15 19l-7-7 7-7" />
+                </svg>
+              </div>
+            </button>
+          )}
+          
+          {canScrollRight && (
+            <button
+              onClick={() => scroll('right')}
+              className="absolute right-0 top-0 bottom-0 z-20 w-16 bg-gradient-to-l from-black/80 to-transparent flex items-center justify-end pr-2 opacity-0 group-hover/row:opacity-100 transition-opacity duration-300 hover:from-black/90"
+              aria-label="Scroll right"
+            >
+              <div className="w-10 h-10 rounded-full bg-black/60 hover:bg-black/80 flex items-center justify-center backdrop-blur-sm">
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" />
+                </svg>
+              </div>
+            </button>
+          )}
+
+          <div 
+            ref={scrollContainerRef}
+            className="flex gap-5 overflow-x-auto scrollbar-hide pb-4 scroll-smooth"
+          >
+            {items.map(item => (
+              <MyMediaCard key={item.Id} item={item} onClick={onItemClick} />
+            ))}
+          </div>
+       </div>
+    </div>
+  );
+});
+
+
 // MediaRow component - Modern Netflix-style horizontal scroll
 const MediaRow = memo(({ title, items, icon, browseLink, subtitle, onItemClick, onBrowseClick, onToggleFavorite, favChanging, favoriteIds, onRemove, enableDragReorder, onReorder, editMode, isHidden, onToggleVisibility, onMoveUp, onMoveDown, canMoveUp, canMoveDown }: { 
   title: string; 
@@ -468,8 +621,10 @@ const MediaRow = memo(({ title, items, icon, browseLink, subtitle, onItemClick, 
 export function Home() {
   const navigate = useNavigate();
   const location = useLocation();
-  const defaultHomeSectionOrder = [
+   const defaultHomeSectionOrder = [
+    'my_media',
     'continue_movies',
+
     'continue_tv',
     'favorites',
     'recommended_movies',
@@ -479,7 +634,9 @@ export function Home() {
     'latest_movies',
     'latest_episodes',
   ];
+  const [userViews, setUserViews] = useState<EmbyItem[]>([]);
   const [latestMovies, setLatestMovies] = useState<EmbyItem[]>([]);
+
   const [latestEpisodes, setLatestEpisodes] = useState<EmbyItem[]>([]);
   const [resumeMovies, setResumeMovies] = useState<EmbyItem[]>([]);
   const [resumeSeries, setResumeSeries] = useState<EmbyItem[]>([]);
@@ -1161,37 +1318,9 @@ export function Home() {
       }
       
       // Fetch essential data in parallel
-      const [resumeMovies, resumeEpisodes, recentlyPlayedEpisodes, favorites] = await Promise.all([
-        // Resumable movies (partially watched) - sorted by DatePlayed
-        embyApi.getItems({ 
-          recursive: true, 
-          includeItemTypes: 'Movie', 
-          filters: 'IsResumable', 
-          limit: 50, 
-          sortBy: 'DatePlayed', 
-          sortOrder: 'Descending',
-          fields: 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,UserData'
-        }),
-        // Resumable episodes (partially watched)
-        embyApi.getItems({ 
-          recursive: true, 
-          includeItemTypes: 'Episode', 
-          filters: 'IsResumable', 
-          limit: 50, 
-          sortBy: 'DatePlayed', 
-          sortOrder: 'Descending',
-          fields: 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,UserData,SeriesId,SeriesName,SeriesPrimaryImageTag,ParentIndexNumber,IndexNumber'
-        }),
-        // Recently PLAYED episodes (completed) - these have LastPlayedDate
-        embyApi.getItems({ 
-          recursive: true, 
-          includeItemTypes: 'Episode', 
-          filters: 'IsPlayed', 
-          limit: 100, 
-          sortBy: 'DatePlayed', 
-          sortOrder: 'Descending',
-          fields: 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,UserData,SeriesId,SeriesName,SeriesPrimaryImageTag,ParentIndexNumber,IndexNumber'
-        }),
+      const [resumeItems, favorites, userViewsRes] = await Promise.all([
+        // Continue watching - uses Emby's built-in resume endpoint (one call for everything)
+        embyApi.getResume({ limit: 50 }),
         // Favorites (movies, series, episodes)
         embyApi.getItems({
           recursive: true,
@@ -1202,156 +1331,36 @@ export function Home() {
           sortOrder: 'Descending',
           fields: 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,UserData,SeriesId,SeriesName,SeriesPrimaryImageTag,ParentIndexNumber,IndexNumber,ChildCount,ProviderIds'
         }),
+        // Libraries
+        embyApi.getUserViews(),
       ]);
+      setUserViews(userViewsRes.Items || []);
 
       const favoritesItems = favorites.Items || [];
       const orderedFavorites = normalizeFavoritesOrder(favoritesItems);
       setFavoriteItems(orderedFavorites);
       sessionStorage.setItem('home_favorites', JSON.stringify(orderedFavorites));
       localStorage.setItem('emby_hasFavorites', favoritesItems.length > 0 ? 'true' : 'false');
-      
-      // Build a map of series ID -> most recent LastPlayedDate from recently played episodes
-      const seriesLastPlayedMap = new Map<string, string>();
-      recentlyPlayedEpisodes.Items.forEach((episode) => {
-        if (episode.SeriesId && episode.UserData?.LastPlayedDate) {
-          // Only set if not already set (first one is most recent due to sorting)
-          if (!seriesLastPlayedMap.has(episode.SeriesId)) {
-            seriesLastPlayedMap.set(episode.SeriesId, episode.UserData.LastPlayedDate);
-          }
-        }
-      });
-      
-      // Also check resumable episodes for LastPlayedDate (partially watched)
-      resumeEpisodes.Items.forEach((episode) => {
-        if (episode.SeriesId && episode.UserData?.LastPlayedDate) {
-          const existing = seriesLastPlayedMap.get(episode.SeriesId);
-          // Use more recent date
-          if (!existing || episode.UserData.LastPlayedDate > existing) {
-            seriesLastPlayedMap.set(episode.SeriesId, episode.UserData.LastPlayedDate);
-          }
-        }
-      });
-      
-      // Collect unique series IDs from resumable episodes and recently played
-      const seriesIds = new Set<string>();
-      resumeEpisodes.Items.forEach((ep) => {
-        if (ep.SeriesId) seriesIds.add(ep.SeriesId);
-      });
-      recentlyPlayedEpisodes.Items.forEach((ep) => {
-        if (ep.SeriesId) seriesIds.add(ep.SeriesId);
-      });
-      
-      // Helper to compare episode order
-      const isAfter = (epA: EmbyItem, epB: EmbyItem) => {
-        const seasonA = epA.ParentIndexNumber || 0;
-        const seasonB = epB.ParentIndexNumber || 0;
-        if (seasonA !== seasonB) return seasonA > seasonB;
-        return (epA.IndexNumber || 0) > (epB.IndexNumber || 0);
-      };
-      
-      // Fetch all episodes for each series and apply the same logic as MediaDetails
-      const seriesEpisodesPromises = Array.from(seriesIds).map(async (seriesId): Promise<EmbyItem | null> => {
-        try {
-          const allEpisodesRes = await embyApi.getItems({
-            parentId: seriesId,
-            recursive: true,
-            includeItemTypes: 'Episode',
-            sortBy: 'ParentIndexNumber,IndexNumber',
-            sortOrder: 'Ascending',
-          });
-          
-          const allEpisodes = allEpisodesRes.Items;
-          if (allEpisodes.length === 0) return null;
-          
-          // Sort episodes by season and episode number
-          const sortedEpisodes = [...allEpisodes].sort((a, b) => {
-            const seasonA = a.ParentIndexNumber || 0;
-            const seasonB = b.ParentIndexNumber || 0;
-            if (seasonA !== seasonB) return seasonA - seasonB;
-            return (a.IndexNumber || 0) - (b.IndexNumber || 0);
-          });
-          
-          // Find in-progress episodes (have progress but not completed)
-          const inProgressEpisodes = sortedEpisodes.filter(
-            ep => ep.UserData?.PlaybackPositionTicks && ep.UserData.PlaybackPositionTicks > 0 && !ep.UserData?.Played
-          );
-          
-          let latestInProgress: EmbyItem | null = null;
-          if (inProgressEpisodes.length > 0) {
-            latestInProgress = inProgressEpisodes.reduce((latest, ep) => 
-              isAfter(ep, latest) ? ep : latest
-            , inProgressEpisodes[0]);
-          }
-          
-          // Find last completed episode
-          const completedEpisodes = sortedEpisodes.filter(ep => ep.UserData?.Played);
-          let lastCompleted: EmbyItem | null = null;
-          if (completedEpisodes.length > 0) {
-            lastCompleted = completedEpisodes.reduce((latest, ep) => 
-              isAfter(ep, latest) ? ep : latest
-            , completedEpisodes[0]);
-          }
-          
-          let nextUpEpisode: EmbyItem | null = null;
-          
-          // Apply same logic as MediaDetails
-          if (latestInProgress) {
-            // Check if there's a completed episode AFTER the in-progress one
-            if (lastCompleted && isAfter(lastCompleted, latestInProgress)) {
-              // Find first unwatched after last completed
-              nextUpEpisode = sortedEpisodes.find(ep => 
-                !ep.UserData?.Played && isAfter(ep, lastCompleted!)
-              ) || null;
-            } else {
-              nextUpEpisode = latestInProgress;
-            }
-          } else if (lastCompleted) {
-            // No in-progress, find first unwatched after last completed
-            nextUpEpisode = sortedEpisodes.find(ep => 
-              !ep.UserData?.Played && isAfter(ep, lastCompleted!)
-            ) || null;
-          }
-          
-          if (nextUpEpisode) {
-            // Get series last played date for sorting
-            const seriesLastPlayed = seriesLastPlayedMap.get(seriesId);
-            
-            // Attach series last played date for sorting
-            return {
-              ...nextUpEpisode,
-              UserData: {
-                ...(nextUpEpisode.UserData || {}),
-                LastPlayedDate: seriesLastPlayed || nextUpEpisode.UserData?.LastPlayedDate,
-              } as EmbyItem['UserData'],
-            };
-          }
-          
-          return null;
-        } catch (err) {
-          console.error('Failed to fetch episodes for series:', seriesId, err);
-          return null;
-        }
-      });
-      
-      const seriesNextUpResults = await Promise.all(seriesEpisodesPromises);
-      const processedEpisodes: EmbyItem[] = seriesNextUpResults.filter((ep): ep is EmbyItem => ep !== null);
-      
-      // Deduplicate processedEpisodes by ID
-      const seenSeriesEpIds = new Set<string>();
-      const uniqueProcessedEpisodes = processedEpisodes.filter(ep => {
-        if (seenSeriesEpIds.has(ep.Id)) return false;
-        seenSeriesEpIds.add(ep.Id);
+
+      // Split resume items into movies and series episodes
+      const allResumeItems = resumeItems.Items || [];
+      const dedupedResumeMovies = deduplicateItems(allResumeItems.filter(item => item.Type === 'Movie'));
+
+      // Deduplicate series episodes by name (handles 4K/1080p duplicates with different SeriesIds)
+      const seenSeriesNames = new Set<string>();
+      const uniqueResumeEpisodes = allResumeItems.filter(item => {
+        if (item.Type !== 'Episode') return false;
+        const seriesName = item.SeriesName || item.SeriesId || item.Id;
+        if (seenSeriesNames.has(seriesName)) return false;
+        seenSeriesNames.add(seriesName);
         return true;
       });
-      
-      // Movies are already sorted by DatePlayed from API, deduplicate them
-      // Set separate states for movies and series
-      const dedupedResumeMovies = deduplicateItems(resumeMovies.Items);
+
       setResumeMovies(dedupedResumeMovies);
-      setResumeSeries(uniqueProcessedEpisodes);
+      setResumeSeries(uniqueResumeEpisodes);
       try {
         sessionStorage.setItem('home_resumeMovies', JSON.stringify(dedupedResumeMovies));
-        sessionStorage.setItem('home_resumeSeries', JSON.stringify(uniqueProcessedEpisodes));
+        sessionStorage.setItem('home_resumeSeries', JSON.stringify(uniqueResumeEpisodes));
         localStorage.setItem(HOME_CACHE_REFRESH_KEY, String(Date.now()));
       } catch (e) {
         // ignore cache errors
@@ -1566,8 +1575,15 @@ export function Home() {
   };
 
   const handleItemClick = useCallback((item: EmbyItem) => {
+    // For library collections, go to the browse page with parentId
+    if (item.Type === 'CollectionFolder' || item.Type === 'UserView') {
+      const type = item.CollectionType === 'tvshows' ? 'Series' : 'Movie';
+      navigate(`/browse?type=${type}&parentId=${item.Id}`);
+      return;
+    }
     // For episodes, go to the parent series details page
     if (item.Type === 'Episode' && item.SeriesId) {
+
       navigate(`/details/${item.SeriesId}`);
     } else {
       // For movies/series, go to their details page
@@ -1746,8 +1762,27 @@ export function Home() {
           type Section = { id: string; label: string; element: ReactElement | null };
           const sections: Section[] = [
             {
+              id: 'my_media',
+              label: 'My Media',
+              element: (
+                <MyMediaRow
+                  items={userViews}
+                  onItemClick={handleItemClick}
+                  editMode={isEditMode}
+                  isHidden={sectionVisibility['my_media'] === false}
+                  onToggleVisibility={() => {
+                    setSectionVisibility(prev => ({
+                      ...prev,
+                      my_media: prev['my_media'] === false
+                    }));
+                  }}
+                />
+              )
+            },
+            {
               id: 'continue_movies',
               label: 'Continue Watching Movies',
+
               element: (
                 <MediaRow
                   title="Continue Watching Movies"

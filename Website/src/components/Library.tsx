@@ -24,30 +24,41 @@ export function Library() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('SortName');
+  const [sortOrder, setSortOrder] = useState<'Ascending' | 'Descending'>('Ascending');
 
   useEffect(() => {
     if (id) {
       loadLibrary();
     }
-  }, [id, sortBy]);
+  }, [id, sortBy, sortOrder]);
 
   const loadLibrary = async () => {
     try {
       setIsLoading(true);
       
       // Get items in this library/folder
+      // First check if this is a BoxSet (collection) - use different defaults
+      let parentData: EmbyItem | null = null;
+      try {
+        parentData = await embyApi.getItem(id!);
+      } catch { /* ignore */ }
+      const isBoxSet = parentData?.Type === 'BoxSet';
+
       const response = await embyApi.getItems({
         parentId: id,
-        recursive: true,
-        includeItemTypes: 'Movie,Series',
-        sortBy: sortBy,
-        sortOrder: 'Ascending',
+        recursive: !isBoxSet,
+        includeItemTypes: isBoxSet ? undefined : ((sortBy === 'LastContentPremiereDate' || sortBy === 'DateLastContentAdded') ? 'Series' : 'Movie,Series'),
+        sortBy: isBoxSet && sortBy === 'SortName' ? 'DisplayOrder' : sortBy,
+        sortOrder: sortOrder,
+        fields: 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,Studios,ChildCount,SeasonCount,ProviderIds,Path,MediaSources,UserData,LastContentPremiereDate,DateLastContentAdded'
       });
 
       setItems(response.Items);
 
-      // If viewing a specific item, get its details for the header
-      if (id) {
+      // Set parent item for the header
+      if (parentData) {
+        setParentItem(parentData);
+      } else if (id) {
         const allItems = await embyApi.getItems({ parentId: undefined });
         const parent = allItems.Items.find((item) => item.Id === id);
         if (parent) setParentItem(parent);
@@ -67,8 +78,8 @@ export function Library() {
   );
 
   const handleItemClick = (item: EmbyItem) => {
-    if (item.Type === 'Series') {
-      // For TV series, navigate to show the seasons/episodes
+    if (item.Type === 'Series' || item.Type === 'BoxSet') {
+      // For TV series or collections, navigate to show children
       navigate(`/library/${item.Id}`);
     } else {
       // For movies, go to player
@@ -113,7 +124,7 @@ export function Library() {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center gap-4 mb-4">
             <button
-              onClick={() => navigate('/home')}
+              onClick={() => navigate(-1)}
               className="text-gray-400 hover:text-white transition-colors"
             >
               ← Back
@@ -138,14 +149,40 @@ export function Library() {
             {/* Sort */}
             <select
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="px-4 py-2 bg-dark-bg border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              onChange={(e) => {
+                const val = e.target.value;
+                setSortBy(val);
+                // Default to descending for date/rating sorts, ascending for name
+                if (val === 'SortName') {
+                  setSortOrder('Ascending');
+                } else {
+                  setSortOrder('Descending');
+                }
+              }}
+              className="px-4 py-2 bg-dark-bg border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500 [&>option]:bg-gray-900 [&>option]:text-white"
             >
               <option value="SortName">Name</option>
               <option value="DateCreated">Date Added</option>
               <option value="PremiereDate">Release Date</option>
-              <option value="CommunityRating">Rating</option>
+              {parentItem?.CollectionType === 'tvshows' && (
+                <>
+                  <option value="LastContentPremiereDate">Last Episode Released</option>
+                  <option value="DateLastContentAdded">Last Episode Added</option>
+                </>
+              )}
+              {parentItem?.CollectionType !== 'boxsets' && (
+                <option value="CommunityRating">Rating</option>
+              )}
             </select>
+
+            {/* Sort Order Toggle */}
+            <button
+              onClick={() => setSortOrder(prev => prev === 'Ascending' ? 'Descending' : 'Ascending')}
+              className="px-4 py-2 bg-dark-bg border border-gray-700 rounded-lg text-white hover:bg-dark-hover transition-colors focus:outline-none focus:border-blue-500"
+              title={sortOrder === 'Ascending' ? 'Ascending' : 'Descending'}
+            >
+              {sortOrder === 'Ascending' ? '↑ Asc' : '↓ Desc'}
+            </button>
           </div>
         </div>
       </header>

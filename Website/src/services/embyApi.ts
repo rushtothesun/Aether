@@ -277,11 +277,13 @@ class EmbyApiService {
     years?: string;
     fields?: string;
     anyProviderIdEquals?: string;
+    skipCache?: boolean;
   } = {}): Promise<ItemsResponse> {
     // Don't cache resume/continue watching or recently played items - they need to be fresh
     const isResumeOrPlayedQuery = params.filters?.includes('IsResumable') || params.filters?.includes('IsPlayed');
-    
-    if (!isResumeOrPlayedQuery) {
+    const shouldSkipCache = params.skipCache || isResumeOrPlayedQuery;
+
+    if (!shouldSkipCache) {
       const cacheKey = this.getCacheKey('getItems', params);
       const cached = this.getFromCache<ItemsResponse>(cacheKey);
       if (cached) {
@@ -294,8 +296,17 @@ class EmbyApiService {
     if (params.recursive) queryParams.append('Recursive', 'true');
     if (params.includeItemTypes) queryParams.append('IncludeItemTypes', params.includeItemTypes);
     if (params.filters) queryParams.append('Filters', params.filters);
-    if (params.sortBy) queryParams.append('SortBy', params.sortBy);
-    if (params.sortOrder) queryParams.append('SortOrder', params.sortOrder);
+    if (params.sortBy) {
+      // Add SortName as secondary sort for stable ordering (matches Emby web UI behavior)
+      const sort = params.sortBy.includes('SortName') || params.sortBy === 'DisplayOrder' ? params.sortBy : `${params.sortBy},SortName`;
+      queryParams.append('SortBy', sort);
+    }
+    if (params.sortOrder) {
+      const order = params.sortOrder === 'Asc' ? 'Ascending' : 
+                    params.sortOrder === 'Desc' ? 'Descending' : 
+                    params.sortOrder;
+      queryParams.append('SortOrder', order);
+    }
     if (params.limit) queryParams.append('Limit', params.limit.toString());
     if (params.startIndex) queryParams.append('StartIndex', params.startIndex.toString());
     if (params.searchTerm) queryParams.append('SearchTerm', params.searchTerm);
@@ -308,7 +319,7 @@ class EmbyApiService {
     const result = await this.request<ItemsResponse>(`/Users/${this.userId}/Items?${queryParams.toString()}`);
     
     // Cache the result if it's not a resume or played query
-    if (!isResumeOrPlayedQuery) {
+    if (!shouldSkipCache) {
       const cacheKey = this.getCacheKey('getItems', params);
       this.setCache(cacheKey, result);
     }
@@ -386,11 +397,11 @@ class EmbyApiService {
       PlaySessionId: playSessionId,
       api_key: this.accessToken,
     });
-    
+
     if (audioStreamIndex !== undefined) {
       params.append('AudioStreamIndex', audioStreamIndex.toString());
     }
-    
+
     // Always transcode to HLS for browser compatibility
     params.append('Container', 'ts');
     params.append('VideoCodec', 'h264');
@@ -400,8 +411,20 @@ class EmbyApiService {
     params.append('SegmentContainer', 'ts');
     params.append('MinSegments', '1');
     params.append('BreakOnNonKeyFrames', 'true');
-    
+
     return `${this.baseUrl}/emby/Videos/${itemId}/master.m3u8?${params.toString()}`;
+  }
+
+  getDirectStreamUrl(itemId: string, mediaSourceId: string, playSessionId: string, container?: string): string {
+    const params = new URLSearchParams({
+      MediaSourceId: mediaSourceId,
+      PlaySessionId: playSessionId,
+      Static: 'true',
+      api_key: this.accessToken,
+    });
+
+    const ext = container || 'mkv';
+    return `${this.baseUrl}/emby/Videos/${itemId}/stream.${ext}?${params.toString()}`;
   }
 
   getSubtitleUrl(
@@ -520,6 +543,23 @@ class EmbyApiService {
     });
   }
 
+  // Get resume items (continue watching) - uses Emby's built-in resume endpoint
+  // This returns both partially-watched items AND next-up episodes for series in progress
+  async getResume(params: {
+    limit?: number;
+    fields?: string;
+    mediaTypes?: string;
+  } = {}): Promise<ItemsResponse> {
+    const queryParams = new URLSearchParams();
+    queryParams.append('Recursive', 'true');
+    queryParams.append('MediaTypes', params.mediaTypes || 'Video');
+    queryParams.append('Fields', params.fields || 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,UserData,SeriesId,SeriesName,SeriesPrimaryImageTag,ParentIndexNumber,IndexNumber');
+    if (params.limit) queryParams.append('Limit', params.limit.toString());
+    queryParams.append('EnableTotalRecordCount', 'true');
+
+    return this.request<ItemsResponse>(`/Users/${this.userId}/Items/Resume?${queryParams.toString()}`);
+  }
+
   // Get next up episodes for continue watching - this uses the series' last played date
   async getNextUp(params: {
     limit?: number;
@@ -531,7 +571,7 @@ class EmbyApiService {
     queryParams.append('Fields', params.fields || 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,SeriesPrimaryImage');
     // EnableTotalRecordCount helps with pagination if needed
     queryParams.append('EnableTotalRecordCount', 'true');
-    
+
     return this.request<ItemsResponse>(`/Shows/NextUp?${queryParams.toString()}`);
   }
 

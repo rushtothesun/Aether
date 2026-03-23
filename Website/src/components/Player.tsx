@@ -19,6 +19,7 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
   const { setActiveId, isCollapsed, setIsCollapsed, lastNonPlayerPath, setSuppressAutoOpen } = usePlayerUi();
   const backgroundLocation = (location.state as { backgroundLocation?: unknown } | undefined)
     ?.backgroundLocation as typeof location | undefined;
+  const startFromBeginning = !!(location.state as { startFromBeginning?: boolean } | undefined)?.startFromBeginning;
   const isCollapsedView = isCollapsedProp ?? isCollapsed;
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -81,8 +82,21 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [showZoomMenu, setShowZoomMenu] = useState(false);
   const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | undefined>();
+  const [selectedEmbeddedSubIndex, setSelectedEmbeddedSubIndex] = useState<number | null>(null);
   const [customSubtitleUrl, setCustomSubtitleUrl] = useState<string>('');
   const [customSubtitleLabel, setCustomSubtitleLabel] = useState<string>('');
+  const [subtitlePosition, setSubtitlePosition] = useState<number>(() => {
+    const raw = localStorage.getItem('player_subtitlePosition');
+    const parsed = raw ? Number(raw) : 100;
+    if (Number.isNaN(parsed)) return 100;
+    return Math.max(0, Math.min(150, parsed));
+  });
+  const [subtitleFontSize, setSubtitleFontSize] = useState<number>(() => {
+    const raw = localStorage.getItem('player_subtitleFontSize');
+    const parsed = raw ? Number(raw) : 55;
+    if (Number.isNaN(parsed)) return 55;
+    return Math.max(20, Math.min(100, parsed));
+  });
   const [subtitleDelay, setSubtitleDelay] = useState<number>(() => {
     const raw = localStorage.getItem('player_subtitleDelay');
     const parsed = raw ? Number(raw) : 0;
@@ -153,6 +167,12 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
   const [mpvCacheSpeed, setMpvCacheSpeed] = useState<number>(0);
   const [mpvBufferedPercent, setMpvBufferedPercent] = useState<number>(0);
   const [mpvVideoParams, setMpvVideoParams] = useState<{ width: number; height: number } | null>(null);
+  const [sharpness, setSharpness] = useState<number>(() => {
+    const stored = localStorage.getItem('player_sharpness');
+    const val = stored ? parseInt(stored, 10) : 0;
+    return isNaN(val) ? 0 : val;
+  });
+  const [showSharpnessMenu, setShowSharpnessMenu] = useState(false);
   const statsIntervalRef = useRef<number | null>(null);
   const hideTimeoutRef = useRef<number | null>(null);
   const progressIntervalRef = useRef<number | null>(null);
@@ -187,10 +207,8 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
   const currentTimeRef = useRef<number>(0);
   const isPlayingRef = useRef<boolean>(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Keyboard hold-to-seek for seek bar
-  const seekHoldIntervalRef = useRef<number | null>(null);
-  const seekHoldDirRef = useRef<'left' | 'right' | null>(null);
-  const seekHoldStartRef = useRef<number>(0);
+  // Track that a keyboard seek key is held (to ignore repeated keydown events)
+  const seekKeyHeldRef = useRef<'left' | 'right' | null>(null);
   // Focus target for moving from sliders
   const playButtonFocusRef = useRef<HTMLButtonElement>(null);
   const lastSubdlSearchKeyRef = useRef<string>('');
@@ -239,6 +257,18 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    if (isCollapsedView) {
+      document.body.style.overflow = '';
+      return;
+    }
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isCollapsedView]);
 
   useEffect(() => {
     if (!useLibmpv) return;
@@ -489,6 +519,16 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
     if (!useLibmpv || !mpvApiRef.current || !mpvActiveRef.current) return;
     mpvApiRef.current.setProperty('sub-delay', subtitleDelay).catch(() => {});
   }, [subtitleDelay, useLibmpv]);
+
+  useEffect(() => {
+    if (!useLibmpv || !mpvApiRef.current || !mpvActiveRef.current) return;
+    mpvApiRef.current.setProperty('sub-pos', subtitlePosition).catch(() => {});
+  }, [subtitlePosition, useLibmpv]);
+
+  useEffect(() => {
+    if (!useLibmpv || !mpvApiRef.current || !mpvActiveRef.current) return;
+    mpvApiRef.current.setProperty('sub-font-size', subtitleFontSize).catch(() => {});
+  }, [subtitleFontSize, useLibmpv]);
 
   // Effect to show "Up Next" popup when within 2 minutes of end
   useEffect(() => {
@@ -1397,7 +1437,7 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
         hideTimeoutRef.current = null;
       }
     };
-  }, [isAndroidTV, showControls, showAudioMenu, showSubtitleMenu, showFilterMenu, showZoomMenu]);
+  }, [isAndroidTV, showControls, showAudioMenu, showSubtitleMenu, showFilterMenu, showZoomMenu, showSharpnessMenu]);
 
   useEffect(() => {
     if (!showSubtitleMenu) return;
@@ -1494,8 +1534,8 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
       const itemDetails = await embyApi.getItem(resolvedId!);
       if (itemDetails) setItem(itemDetails);
       
-      // Get resume position in seconds
-      const resumePositionTicks = itemDetails?.UserData?.PlaybackPositionTicks || 0;
+      // Get resume position in seconds (skip if starting from beginning)
+      const resumePositionTicks = startFromBeginning ? 0 : (itemDetails?.UserData?.PlaybackPositionTicks || 0);
       const resumePositionSeconds = resumePositionTicks / 10000000;
       setResumePosition(resumePositionSeconds);
 
@@ -1590,18 +1630,23 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
 
       if (!mpvInitializedRef.current) {
         const isWindows = /Windows/i.test(navigator.userAgent);
+        const bufferMinutes = parseInt(localStorage.getItem('emby_bufferMinutes') || '30', 10);
+        const bufferSecs = isNaN(bufferMinutes) ? 1800 : bufferMinutes * 60;
+        const bufferRamMax = parseInt(localStorage.getItem('emby_bufferRamMax') || '500', 10);
+        const bufferRamBytes = isNaN(bufferRamMax) ? 500 : bufferRamMax;
+
         await mpvApi.init({
           initialOptions: {
             'vo': 'gpu-next',
             ...(isWindows ? { 'gpu-context': 'd3d11' } : {}),
-            'hwdec': 'auto',
+            'hwdec': 'auto-copy',
             'hwdec-codecs': 'all',
             'vd-lavc-dr': 'yes',
             'cache': 'yes',
-            'cache-secs': '1800',
+            'cache-secs': String(bufferSecs),
             'cache-on-disk': 'no',
-            'demuxer-max-bytes': '500M',
-            'demuxer-max-back-bytes': '500M',
+            'demuxer-max-bytes': `${bufferRamBytes}M`,
+            'demuxer-max-back-bytes': `${bufferRamBytes}M`,
             'network-timeout': '30',
             'keep-open': 'yes',
             'force-window': 'yes',
@@ -1728,6 +1773,14 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
       await mpvApi.command('loadfile', [url, 'replace']);
       await mpvApi.setProperty('volume', Math.round(clampVolume(volume) * 100));
       await mpvApi.setProperty('mute', isMuted);
+      // Set preferred audio track for direct play
+      if (selectedAudioIndex !== undefined && selectedSource) {
+        const audioStreams = selectedSource.MediaStreams.filter(s => s.Type === 'Audio');
+        const audioPosition = audioStreams.findIndex(s => s.Index === selectedAudioIndex);
+        if (audioPosition !== -1) {
+          await mpvApi.command('set', ['aid', String(audioPosition + 1)]).catch(() => {});
+        }
+      }
       await mpvApi.setProperty('pause', false);
       mpvPauseRef.current = false;
       mpvLastPauseRef.current = false;
@@ -1739,12 +1792,30 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
         const panY = autoZoomEnabled ? Math.max(-1, Math.min(1, detectedOffset / 100)) : 0;
         await mpvApi.setProperty('video-zoom', zoomLog2);
         await mpvApi.setProperty('video-pan-y', panY);
-        if (customSubtitleUrl) {
+        
+        await mpvApi.setProperty('sub-pos', subtitlePosition);
+        await mpvApi.setProperty('sub-font-size', subtitleFontSize);
+        
+        if (selectedEmbeddedSubIndex !== null) {
+          // Direct play: select embedded subtitle track via sid
+          const subtitleStreams = selectedSource?.MediaStreams?.filter(s => s.Type === 'Subtitle') || [];
+          const position = subtitleStreams.findIndex(s => s.Index === selectedEmbeddedSubIndex);
+          if (position !== -1) {
+            await mpvApi.command('set', ['sid', String(position + 1)]);
+            await mpvApi.setProperty('sub-visibility', true);
+          }
+          await mpvApi.setProperty('sub-delay', subtitleDelay);
+        } else if (customSubtitleUrl) {
           await mpvApi.setProperty('sub-visibility', true);
           await mpvApi.command('sub-add', [customSubtitleUrl, 'select']);
           await mpvApi.setProperty('sub-delay', subtitleDelay);
         } else {
+          await mpvApi.command('set', ['sid', 'no']).catch(() => {});
           await mpvApi.setProperty('sub-visibility', false);
+        }
+        if (sharpness > 0) {
+          const amount = (sharpness / 20).toFixed(2);
+          await mpvApi.setProperty('vf', `unsharp=7:7:${amount}:7:7:0.5`);
         }
       } catch (err) {
         console.warn('Failed to apply MPV filters/zoom/subtitles:', err);
@@ -1870,13 +1941,18 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
     if (Hls.isSupported()) {
       if (isStale()) return;
       console.log('Using HLS.js');
+      const bufferMinutes = parseInt(localStorage.getItem('emby_bufferMinutes') || '30', 10);
+      const bufferSecs = isNaN(bufferMinutes) ? 1800 : bufferMinutes * 60;
+      const bufferRamMax = parseInt(localStorage.getItem('emby_bufferRamMax') || '500', 10);
+      const bufferRamBytes = isNaN(bufferRamMax) ? 500 : bufferRamMax;
+
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
         backBufferLength: 300, // Keep 5 mins of back buffer
-        maxBufferLength: 1800, // Buffer up to 30 minutes ahead
-        maxMaxBufferLength: 1800,
-        maxBufferSize: 2 * 1000 * 1000 * 1000, // 2GB buffer for 4K
+        maxBufferLength: bufferSecs,
+        maxMaxBufferLength: bufferSecs,
+        maxBufferSize: bufferRamBytes * 1024 * 1024,
         maxBufferHole: 0.5,
         // Continue buffering while paused - don't stop loading
         startFragPrefetch: true,
@@ -1977,10 +2053,12 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
     if (defaultAudio) {
       setSelectedAudioIndex(defaultAudio.Index);
       
-      const url = embyApi.getStreamUrl(resolvedId!, source.Id, sessionId, source.Container, defaultAudio.Index);
+      const url = useLibmpv
+        ? embyApi.getDirectStreamUrl(resolvedId!, source.Id, sessionId, source.Container)
+        : embyApi.getStreamUrl(resolvedId!, source.Id, sessionId, source.Container, defaultAudio.Index);
       console.log('Stream URL:', url);
       setStreamUrl(url);
-      
+
       // Report playback started with position
       const positionTicks = Math.floor(startPosition * 10000000);
       embyApi.reportPlaybackStart({
@@ -2053,11 +2131,27 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
 
   const handleAudioTrackChange = async (audioIndex: number) => {
     if (!selectedSource) return;
-    
-    const currentTime = useLibmpv ? currentTimeRef.current : (videoRef.current?.currentTime ?? 0);
+
     setSelectedAudioIndex(audioIndex);
     setShowAudioMenu(false);
-    
+
+    // For libmpv direct play, just switch the audio track without restarting
+    if (useLibmpv && mpvApiRef.current && mpvActiveRef.current) {
+      const audioStreams = selectedSource.MediaStreams.filter(s => s.Type === 'Audio');
+      const audioPosition = audioStreams.findIndex(s => s.Index === audioIndex);
+      if (audioPosition !== -1) {
+        try {
+          await mpvApiRef.current.command('set', ['aid', String(audioPosition + 1)]);
+        } catch (err) {
+          console.error('Failed to switch audio track:', err);
+        }
+      }
+      return;
+    }
+
+    // HLS: need to restart with new audio stream index
+    const currentTime = videoRef.current?.currentTime ?? 0;
+
     // Report playback stopped to end the current transcode session
     const positionTicks = Math.floor(currentTime * 10000000);
     try {
@@ -2070,37 +2164,22 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
     } catch (err) {
       console.error('Failed to report playback stopped:', err);
     }
-    
+
     // Destroy current player instances - await to ensure clean state
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
     }
-    if (mpvActiveRef.current && mpvApiRef.current) {
-      try {
-        await mpvApiRef.current.destroy();
-      } catch (err) {
-        console.warn('Failed to destroy LibMPV instance:', err);
-      }
-      if (mpvUnlistenRef.current) {
-        mpvUnlistenRef.current();
-        mpvUnlistenRef.current = null;
-      }
-      mpvActiveRef.current = false;
-      mpvInitializedRef.current = false;
-      mpvObservingRef.current = false;
-      mpvLastPauseRef.current = null;
-    }
-    
+
     // Get a new playback session
     try {
       const newPlaybackInfo = await embyApi.getPlaybackInfo(resolvedId!);
       const newSessionId = newPlaybackInfo.PlaySessionId;
       setPlaySessionId(newSessionId);
-      
+
       const url = embyApi.getStreamUrl(resolvedId!, selectedSource.Id, newSessionId, selectedSource.Container, audioIndex);
       setStreamUrl(url);
-      
+
       // Report playback start with new audio track
       await embyApi.reportPlaybackStart({
         ItemId: resolvedId!,
@@ -2111,11 +2190,6 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
         IsPaused: false,
         PlayMethod: 'DirectPlay',
       });
-      
-      if (useLibmpv) {
-        await loadVideoWithLibmpv(url, currentTime);
-        return;
-      }
 
       {
         const hls = new Hls({
@@ -2385,38 +2459,40 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
     }
   }, [useLibmpv]);
 
-  // Effect to handle space bar for pause/unpause
-  useEffect(() => {
-    const handleSpaceBar = (e: KeyboardEvent) => {
-      // Check if we're in an input field
-      const target = e.target as HTMLElement;
-      const isInInput = target?.tagName === 'INPUT' || 
-                        target?.tagName === 'TEXTAREA' ||
-                        target?.isContentEditable;
-      
-      // Only handle space bar for video pause/unpause
-      if (e.key === ' ' && !isInInput) {
-        e.preventDefault();
-        e.stopPropagation();
-        togglePlayPause();
-      }
-    };
+  const seekToTime = useCallback((time: number) => {
+    if (useLibmpv && mpvApiRef.current) {
+      if (!mpvActiveRef.current || duration <= 0) return;
+      isSeekingRef.current = true;
+      mpvApiRef.current.command('seek', [time, 'absolute', 'exact']).catch(() => {});
+      setCurrentTime(time);
+      setTimeout(() => {
+        isSeekingRef.current = false;
+      }, 500);
+      return;
+    }
+    if (!videoRef.current) return;
+    isSeekingRef.current = true;
+    videoRef.current.currentTime = time;
+    setCurrentTime(time);
+    
+    // Clear seeking flag after video has had time to seek
+    // The 'seeked' event would be ideal but this timeout is more reliable
+    setTimeout(() => {
+      isSeekingRef.current = false;
+    }, 500);
+  }, [duration, useLibmpv]);
 
-    // Use capture phase to intercept before TV navigation
-    window.addEventListener('keydown', handleSpaceBar, true);
-    return () => window.removeEventListener('keydown', handleSpaceBar, true);
-  }, [togglePlayPause]);
+  const skipBackward = useCallback((amount: number = 10) => {
+    const nextTime = Math.max(0, currentTimeRef.current - amount);
+    seekToTime(nextTime);
+    showControlsTemporarily();
+  }, [seekToTime, showControlsTemporarily]);
 
-  // Helpers for keyboard-accelerated seeking on the seek bar
-  const clampTime = (t: number, min: number, max: number) => Math.max(min, Math.min(max, t));
-  const getSeekStep = (heldMs: number): number => {
-    // Acceleration: start small then ramp up with hold duration
-    if (heldMs > 6000) return 40; // 40s per tick
-    if (heldMs > 3000) return 20; // 20s per tick
-    if (heldMs > 1500) return 10; // 10s per tick
-    if (heldMs > 800) return 5;   // 5s per tick
-    return 2;                     // 2s initial
-  };
+  const skipForward = useCallback((amount: number = 10) => {
+    const nextTime = Math.min(duration, currentTimeRef.current + amount);
+    seekToTime(nextTime);
+    showControlsTemporarily();
+  }, [duration, seekToTime, showControlsTemporarily]);
 
   // Ref to track if we're in a click (mousedown without significant movement)
   const isClickRef = useRef(true);
@@ -2465,6 +2541,51 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
     }
   };
 
+  // Combined effect to handle keyboard shortcuts globally
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if focus is in an input, textarea, contenteditable, or range slider
+      const target = e.target as HTMLElement;
+      if (
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable
+      ) return;
+
+      if (e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        togglePlayPause();
+        showControlsTemporarily();
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        e.stopPropagation();
+        // Ignore key repeat from holding — only respond to distinct presses
+        if (e.repeat) return;
+        const dir = e.key === 'ArrowLeft' ? 'left' : 'right';
+        seekKeyHeldRef.current = dir;
+        if (dir === 'left') {
+          skipBackward(10);
+        } else {
+          skipForward(10);
+        }
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        seekKeyHeldRef.current = null;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', handleKeyUp, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('keyup', handleKeyUp, true);
+    };
+  }, [togglePlayPause, skipBackward, skipForward, showControlsTemporarily]);
+
   const updateSeekPosition = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!useLibmpv && !videoRef.current) return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -2472,29 +2593,6 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
     const time = pos * duration;
     setDragTime(time);
     // Don't seek immediately - let mouseUp handle it to prevent double-seeking
-  };
-
-  const seekToTime = (time: number) => {
-    if (useLibmpv && mpvApiRef.current) {
-      if (!mpvActiveRef.current || duration <= 0) return;
-      isSeekingRef.current = true;
-      mpvApiRef.current.command('seek', [time, 'absolute', 'exact']).catch(() => {});
-      setCurrentTime(time);
-      setTimeout(() => {
-        isSeekingRef.current = false;
-      }, 500);
-      return;
-    }
-    if (!videoRef.current) return;
-    isSeekingRef.current = true;
-    videoRef.current.currentTime = time;
-    setCurrentTime(time);
-    
-    // Clear seeking flag after video has had time to seek
-    // The 'seeked' event would be ideal but this timeout is more reliable
-    setTimeout(() => {
-      isSeekingRef.current = false;
-    }, 500);
   };
 
   // Global mouse up handler for dragging
@@ -2610,7 +2708,7 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
 
   // Video filter presets
   const filterPresets: { key: string; name: string; css: string }[] = [
-    { key: 'normal', name: 'Normal', css: 'none' },
+    { key: 'normal', name: 'Normal', css: 'brightness(1)' },
     { key: 'vibrant', name: 'Vibrant', css: 'saturate(1.3) contrast(1.05)' },
     { key: 'cinema', name: 'Cinema', css: 'contrast(1.1) brightness(0.95) saturate(1.1) hue-rotate(-3deg)' },
     { key: 'warm', name: 'Warm', css: 'sepia(0.06) saturate(1.1) brightness(1.02)' },
@@ -2622,11 +2720,28 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
 
   const currentFilterCss = filterPresets.find(p => p.key === selectedFilter)?.css || 'none';
 
+
   const applyFilter = (key: string) => {
     setSelectedFilter(key);
     localStorage.setItem('player_videoFilter', key);
     setShowFilterMenu(false);
   };
+
+  const handleSharpnessChange = (value: number) => {
+    setSharpness(value);
+    localStorage.setItem('player_sharpness', value.toString());
+    
+    if (useLibmpv && mpvInitializedRef.current) {
+      // Map 0-100 to 0.0 - 5.0 amount for FFmpeg unsharp filter
+      // Use larger matrix (7x7) and sharpen both luma and chroma slightly
+      const amount = (value / 20).toFixed(2);
+      const vfString = value > 0 ? `unsharp=7:7:${amount}:7:7:0.5` : '';
+      mpvApiRef.current?.setProperty('vf', vfString).catch(() => {});
+    }
+  };
+
+  const k = sharpness / 100;
+  const sharpnessMatrix = `0 -${k} 0 -${k} ${1 + 4 * k} -${k} 0 -${k} 0`;
 
   // Video zoom presets
   const zoomPresets: { value: number | 'auto'; label: string }[] = [
@@ -2692,9 +2807,9 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
       {streamUrl && (
         <div
           ref={containerRef}
-          className={`player-ui fixed inset-0 z-50 ${
+          className={`player-ui fixed inset-0 z-[1000] ${
             useLibmpv && !isVideoLoading ? 'bg-transparent' : 'bg-black'
-          } overflow-hidden border-t border-white/10 shadow-2xl motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] [--mini-height:5rem] sm:[--mini-height:6rem]`}
+          } overflow-hidden border-t border-white/10 shadow-2xl motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] [--mini-height:5rem] sm:[--mini-height:6rem] ${!showControls && !isCollapsedView && isFullscreen ? 'cursor-none' : ''}`}
           style={
             {
               transform: isCollapsedView ? 'translateY(calc(100% - var(--mini-height)))' : 'translateY(0)',
@@ -2720,7 +2835,7 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
         >
           {/* Header overlay */}
           {!isCollapsedView && (
-            <div className={`absolute top-0 left-0 right-0 z-20 bg-gradient-to-b from-black/80 to-transparent p-6 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+            <div className={`absolute top-0 left-0 right-0 z-20 p-6 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3 sm:gap-4">
                   <button
@@ -2742,9 +2857,9 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
                     </svg>
                   </button>
                   <div>
-                    <h1 className="text-white text-2xl font-bold">{item?.Name}</h1>
+                    <h1 className="text-white text-2xl font-bold" style={{ textShadow: '0 1px 6px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.7)' }}>{item?.Name}</h1>
                     {item?.SeriesName && (
-                      <p className="text-gray-300 text-sm mt-1">
+                      <p className="text-gray-300 text-sm mt-1" style={{ textShadow: '0 1px 4px rgba(0,0,0,0.9)' }}>
                         {item.SeriesName}
                         {item.ParentIndexNumber !== undefined && item.IndexNumber !== undefined && (
                           <span className="ml-2 text-gray-400">
@@ -2799,7 +2914,7 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
             onClick={togglePlayPause}
             className={`w-full h-full cursor-pointer ${isCollapsedView || useLibmpv ? 'object-cover opacity-0 pointer-events-none' : 'object-contain'}`}
             style={{ 
-              filter: currentFilterCss,
+              filter: !useLibmpv && sharpness > 0 ? `${currentFilterCss} url(#sharpen-filter)` : currentFilterCss,
               transform: autoZoomEnabled 
                 ? `scale(${detectedZoom}) translateY(${-detectedOffset}%)`
                 : `scale(${videoZoom})`,
@@ -2828,6 +2943,19 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
               />
             )}
           </video>
+
+          {/* SVG Sharpen Filter */}
+          {!useLibmpv && (
+            <svg width="0" height="0" style={{ position: 'absolute', pointerEvents: 'none' }}>
+              <filter id="sharpen-filter">
+                <feConvolveMatrix 
+                  order="3" 
+                  preserveAlpha="true" 
+                  kernelMatrix={sharpnessMatrix} 
+                />
+              </filter>
+            </svg>
+          )}
 
           {isCollapsedView && (
             <div className="absolute top-0 left-0 right-0 z-40 h-[var(--mini-height)] flex items-center justify-between px-3 sm:px-4 bg-gradient-to-r from-black/85 via-black/50 to-black/85 backdrop-blur-sm">
@@ -3075,7 +3203,7 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
 
           {/* Custom Control Bar */}
           {!isCollapsedView && (
-            <div className={`player-controls absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-black/90 to-transparent transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+            <div className={`player-controls absolute bottom-0 left-0 right-0 z-40 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
             {/* Seek bar */}
             <div className="px-4 pt-2">
               <div 
@@ -3092,64 +3220,6 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
                 onMouseUp={handleSeekBarMouseUp}
                 onMouseEnter={() => setIsHoveringSeekBar(true)}
                 onMouseLeave={() => setIsHoveringSeekBar(false)}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const dir = e.key === 'ArrowLeft' ? 'left' : 'right';
-                    // Start or update hold-based scrubbing (no immediate seek)
-                    if (!seekHoldIntervalRef.current || seekHoldDirRef.current !== dir) {
-                      // Restart if direction changes
-                      if (seekHoldIntervalRef.current) {
-                        clearInterval(seekHoldIntervalRef.current);
-                        seekHoldIntervalRef.current = null;
-                      }
-                      seekHoldDirRef.current = dir;
-                      seekHoldStartRef.current = Date.now();
-                      // Begin keyboard scrubbing from current position
-                      if (!isDragging) {
-                        const start = videoRef.current ? videoRef.current.currentTime : currentTime;
-                        setDragTime(start);
-                        setIsDragging(true);
-                      }
-                      // Immediate step for tap (5s), final seek happens on keyup
-                      setDragTime((prev) => clampTime(prev + (dir === 'left' ? -5 : 5), 0, duration));
-                      showControlsTemporarily();
-                      // While holding, continue to move the thumb only (no seek yet)
-                      seekHoldIntervalRef.current = window.setInterval(() => {
-                        const heldMs = Date.now() - seekHoldStartRef.current;
-                        const stepSec = getSeekStep(heldMs);
-                        setDragTime((prev) => clampTime(prev + (seekHoldDirRef.current === 'left' ? -stepSec : stepSec), 0, duration));
-                      }, 120);
-                    }
-                  }
-                  // Up/Down are handled by spatial nav; do not block
-                }}
-                onKeyUp={(e) => {
-                  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                    if (seekHoldIntervalRef.current) {
-                      clearInterval(seekHoldIntervalRef.current);
-                      seekHoldIntervalRef.current = null;
-                    }
-                    seekHoldDirRef.current = null;
-                    // Commit seek to the selected position
-                    const target = isDragging ? dragTime : currentTime;
-                    seekToTime(target);
-                    setIsDragging(false);
-                  }
-                }}
-                onBlur={() => {
-                  if (seekHoldIntervalRef.current) {
-                    clearInterval(seekHoldIntervalRef.current);
-                    seekHoldIntervalRef.current = null;
-                  }
-                  seekHoldDirRef.current = null;
-                  // If scrubbing was in progress, commit on blur
-                  if (isDragging) {
-                    seekToTime(dragTime);
-                    setIsDragging(false);
-                  }
-                }}
               >
                 {/* Buffer bar */}
                 <div 
@@ -3184,6 +3254,18 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
             {/* Control buttons */}
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-3">
+                {/* Skip Backward */}
+                <button
+                  onClick={() => skipBackward()}
+                  className="p-2 rounded-full bg-white/5 hover:bg-white/20 text-white backdrop-blur-sm transition-all duration-200 hover:scale-110 active:scale-95"
+                  title="Rewind 10s"
+                >
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
+                    <text x="50%" y="85%" textAnchor="middle" fontSize="6px" fontWeight="bold" fill="white">-10</text>
+                  </svg>
+                </button>
+
                 {/* Play/Pause */}
                 <button
                   onClick={togglePlayPause}
@@ -3200,8 +3282,20 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
                   </svg>
                 </button>
 
+                {/* Skip Forward */}
+                <button
+                  onClick={() => skipForward()}
+                  className="p-2 rounded-full bg-white/5 hover:bg-white/20 text-white backdrop-blur-sm transition-all duration-200 hover:scale-110 active:scale-95"
+                  title="Forward 30s"
+                >
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
+                    <text x="55%" y="85%" textAnchor="middle" fontSize="6px" fontWeight="bold" fill="white">+30</text>
+                  </svg>
+                </button>
+
                 {/* Time */}
-                <div className="text-white text-sm font-medium flex items-center gap-2 tabular-nums">
+                <div className="text-white text-sm font-medium flex items-center gap-2 tabular-nums" style={{ textShadow: '0 1px 4px rgba(0,0,0,0.9)' }}>
                   <span className="min-w-[90px]">{formatTime(currentTime)} / {formatTime(duration)}</span>
                   {duration > 0 && (
                     <span className="text-gray-400 text-xs">• Ends {getEndTime()}</span>
@@ -3302,7 +3396,7 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
             {!useLibmpv && (
               <div className="relative" role="listitem">
                 <button
-                  onClick={() => { setShowFilterMenu(!showFilterMenu); setShowAudioMenu(false); setShowSubtitleMenu(false); setShowZoomMenu(false); }}
+                  onClick={() => { setShowFilterMenu(!showFilterMenu); setShowAudioMenu(false); setShowSubtitleMenu(false); setShowZoomMenu(false); setShowSharpnessMenu(false); }}
                   className={`player-control px-4 py-2.5 bg-black/60 hover:bg-black/80 text-white text-sm rounded-full transition-all duration-200 backdrop-blur-md border hover:scale-105 active:scale-95 flex items-center gap-2 ${
                     selectedFilter !== 'normal' ? 'border-blue-500 bg-blue-500/20' : 'border-white/10 hover:border-white/20'
                   }`}
@@ -3334,10 +3428,54 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
               </div>
             )}
 
+            {/* Sharpness button */}
+            <div className="relative" role="listitem">
+              <button
+                onClick={() => { setShowSharpnessMenu(!showSharpnessMenu); setShowFilterMenu(false); setShowAudioMenu(false); setShowSubtitleMenu(false); setShowZoomMenu(false); }}
+                className={`player-control px-4 py-2.5 bg-black/60 hover:bg-black/80 text-white text-sm rounded-full transition-all duration-200 backdrop-blur-md border hover:scale-105 active:scale-95 flex items-center gap-2 ${
+                  sharpness > 0 ? 'border-blue-500 bg-blue-500/20' : 'border-white/10 hover:border-white/20'
+                }`}
+                tabIndex={0}
+                title="Video Sharpness"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Sharpness
+              </button>
+
+              {showSharpnessMenu && (
+                <div className="absolute bottom-full mb-2 right-0 bg-gray-900/95 backdrop-blur-md border border-white/10 rounded-xl shadow-2xl min-w-[240px] p-4" role="menu">
+                  <div className="flex flex-col gap-3">
+                    <div className="flex justify-between items-center text-xs font-medium">
+                      <span className="text-gray-400 uppercase tracking-wider">Level</span>
+                      <span className="text-blue-400">{sharpness}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={sharpness}
+                      onChange={(e) => handleSharpnessChange(parseInt(e.target.value))}
+                      className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      style={{
+                        background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${sharpness}%, #374151 ${sharpness}%, #374151 100%)`
+                      }}
+                    />
+                    <div className="flex justify-between text-[10px] text-gray-500">
+                      <span>Off</span>
+                      <span>Max</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Video zoom button */}
             <div className="relative" role="listitem">
               <button
-                onClick={() => { setShowZoomMenu(!showZoomMenu); setShowAudioMenu(false); setShowSubtitleMenu(false); setShowFilterMenu(false); }}
+                onClick={() => { setShowZoomMenu(!showZoomMenu); setShowAudioMenu(false); setShowSubtitleMenu(false); setShowFilterMenu(false); setShowSharpnessMenu(false); }}
                 className={`player-control px-4 py-2.5 bg-black/60 hover:bg-black/80 text-white text-sm rounded-full transition-all duration-200 backdrop-blur-md border hover:scale-105 active:scale-95 flex items-center gap-2 ${
                   autoZoomEnabled || videoZoom !== 1.0 ? 'border-blue-500 bg-blue-500/20' : 'border-white/10 hover:border-white/20'
                 }`}
@@ -3395,10 +3533,10 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
             )}
 
             {/* Subtitle selector (SubDL) */}
-            {(useLibmpv || (localStorage.getItem('subdl_apiKey') || '').length > 0 || customSubtitleUrl) && (
+            {(useLibmpv || (localStorage.getItem('subdl_apiKey') || '').length > 0 || customSubtitleUrl || (selectedSource && selectedSource.MediaStreams.some(s => s.Type === 'Subtitle'))) && (
               <div className="relative" role="listitem">
                 <button
-                  onClick={() => { setShowSubtitleMenu(!showSubtitleMenu); setShowAudioMenu(false); setShowFilterMenu(false); }}
+                  onClick={() => { setShowSubtitleMenu(!showSubtitleMenu); setShowAudioMenu(false); setShowFilterMenu(false); setShowSharpnessMenu(false); }}
                   className={`player-control px-4 py-2.5 bg-black/60 hover:bg-black/80 text-white text-sm rounded-full transition-all duration-200 backdrop-blur-md border hover:scale-105 active:scale-95 flex items-center gap-2 ${
                     customSubtitleUrl ? 'border-blue-500 bg-blue-500/20' : 'border-white/10 hover:border-white/20'
                   }`}
@@ -3413,12 +3551,7 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
                 {showSubtitleMenu && (
                   <div className="absolute bottom-full mb-2 right-0 bg-gray-900/95 backdrop-blur-md border border-white/10 rounded-xl shadow-2xl min-w-[300px] max-h-[360px] overflow-y-auto" role="menu">
                     <div className="px-4 pt-4 pb-2 border-b border-white/5">
-                      <div className="text-xs text-gray-400">SubDL Subtitles</div>
-                      {((localStorage.getItem('subdl_apiKey') || '').length === 0) && (
-                        <div className="text-xs text-gray-500 mt-1">
-                          To use subtitles, set a SubDL key in Settings.
-                        </div>
-                      )}
+                      <div className="text-xs text-gray-400">Subtitles</div>
                       {customSubtitleLabel ? (
                         <div className="text-sm text-blue-300 mt-1">Active: {customSubtitleLabel}</div>
                       ) : (
@@ -3465,6 +3598,85 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
                       </div>
                     </div>
 
+                    <div className="px-4 py-3 border-b border-white/5">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-xs text-gray-400">Subtitle Position</div>
+                        <div className="text-xs text-gray-300 tabular-nums">
+                          {subtitlePosition}
+                        </div>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={150}
+                        step={1}
+                        value={subtitlePosition}
+                        onChange={(e) => {
+                          const next = Math.max(0, Math.min(150, Number(e.target.value)));
+                          setSubtitlePosition(next);
+                          localStorage.setItem('player_subtitlePosition', String(next));
+                        }}
+                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border-0"
+                        style={{
+                          background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${(subtitlePosition / 150) * 100}%, #374151 ${(subtitlePosition / 150) * 100}%, #374151 100%)`
+                        }}
+                      />
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            setSubtitlePosition(100);
+                            localStorage.setItem('player_subtitlePosition', '100');
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-white/10 text-white hover:bg-white/20 text-xs transition-all"
+                        >
+                          Reset
+                        </button>
+                        <div className="text-[11px] text-gray-500">
+                          0 = top, 100 = bottom (default)
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="px-4 py-3 border-b border-white/5">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-xs text-gray-400">Subtitle Size</div>
+                        <div className="text-xs text-gray-300 tabular-nums">
+                          {subtitleFontSize}
+                        </div>
+                      </div>
+                      <input
+                        type="range"
+                        min={20}
+                        max={100}
+                        step={1}
+                        value={subtitleFontSize}
+                        onChange={(e) => {
+                          const next = Math.max(20, Math.min(100, Number(e.target.value)));
+                          setSubtitleFontSize(next);
+                          localStorage.setItem('player_subtitleFontSize', String(next));
+                        }}
+                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border-0"
+                        style={{
+                          background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${((subtitleFontSize - 20) / 80) * 100}%, #374151 ${((subtitleFontSize - 20) / 80) * 100}%, #374151 100%)`
+                        }}
+                      />
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            setSubtitleFontSize(55);
+                            localStorage.setItem('player_subtitleFontSize', '55');
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-white/10 text-white hover:bg-white/20 text-xs transition-all"
+                        >
+                          Reset
+                        </button>
+                        <div className="text-[11px] text-gray-500">
+                          Default: 55
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Off button */}
                     <button
                       onClick={() => {
                         if (subtitleBlobUrlRef.current) {
@@ -3473,13 +3685,96 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
                         }
                         setCustomSubtitleUrl('');
                         setCustomSubtitleLabel('');
+                        setSelectedEmbeddedSubIndex(null);
                         setShowSubtitleMenu(false);
+                        // Disable embedded subs in mpv
+                        if (useLibmpv && mpvApiRef.current && mpvActiveRef.current) {
+                          mpvApiRef.current.command('set', ['sid', 'no']).catch(() => {});
+                          mpvApiRef.current.setProperty('sub-visibility', false).catch(() => {});
+                        }
                       }}
-                      className="player-menu-item w-full px-4 py-3 text-left transition-all duration-150 border-b border-white/5 text-white hover:bg-white/10"
+                      className={`player-menu-item w-full px-4 py-3 text-left transition-all duration-150 border-b border-white/5 ${
+                        !customSubtitleUrl ? 'bg-blue-500/20 text-blue-400' : 'text-white hover:bg-white/10'
+                      }`}
                       role="menuitem"
                     >
                       <div className="font-medium">Off</div>
                     </button>
+
+                    {/* Embedded subtitle tracks from the video file */}
+                    {selectedSource && selectedSource.MediaStreams.filter(s => s.Type === 'Subtitle').length > 0 && (
+                      <>
+                        <div className="px-4 pt-3 pb-1">
+                          <div className="text-xs text-gray-400">Embedded Tracks</div>
+                        </div>
+                        {selectedSource.MediaStreams
+                          .filter(s => s.Type === 'Subtitle')
+                          .map((stream) => (
+                            <button
+                              key={stream.Index}
+                              onClick={async () => {
+                                const label = stream.DisplayTitle || stream.Language?.toUpperCase() || `Track ${stream.Index}`;
+                                setSelectedEmbeddedSubIndex(stream.Index);
+                                setShowSubtitleMenu(false);
+
+                                if (useLibmpv && mpvApiRef.current && mpvActiveRef.current) {
+                                  // Direct play: mpv has all embedded tracks, use sid
+                                  const subtitleStreams = selectedSource!.MediaStreams.filter(s => s.Type === 'Subtitle');
+                                  const position = subtitleStreams.findIndex(s => s.Index === stream.Index);
+                                  if (position !== -1) {
+                                    try {
+                                      await mpvApiRef.current.command('set', ['sid', String(position + 1)]);
+                                      await mpvApiRef.current.setProperty('sub-visibility', true);
+                                      setCustomSubtitleLabel(label);
+                                    } catch (err) {
+                                      console.error('Failed to set embedded subtitle via sid:', err);
+                                    }
+                                  }
+                                } else {
+                                  // HLS fallback: fetch subtitle from Emby API
+                                  try {
+                                    const subUrl = embyApi.getSubtitleUrl(
+                                      resolvedId!,
+                                      selectedSource!.Id,
+                                      stream.Index,
+                                      { format: 'vtt' }
+                                    );
+                                    const response = await fetch(subUrl);
+                                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                                    const subtitleText = await response.text();
+                                    applySubtitleFromText(subtitleText, label, 'vtt');
+                                  } catch (err) {
+                                    console.error('Failed to load embedded subtitle:', err);
+                                  }
+                                }
+                              }}
+                              className={`player-menu-item w-full px-4 py-3 text-left transition-all duration-150 border-b border-white/5 last:border-b-0 ${
+                                selectedEmbeddedSubIndex === stream.Index ? 'bg-blue-500/20 text-blue-400' : 'text-white hover:bg-white/10'
+                              }`}
+                              role="menuitem"
+                            >
+                              <div className="font-medium">
+                                {stream.DisplayTitle || stream.Language?.toUpperCase() || `Track ${stream.Index}`}
+                                {stream.IsDefault && ' (Default)'}
+                                {stream.IsForced && ' (Forced)'}
+                              </div>
+                              <div className="text-xs text-gray-400 mt-1">
+                                {stream.Codec?.toUpperCase()}{stream.IsTextSubtitleStream === false ? ' (Bitmap)' : ''}
+                              </div>
+                            </button>
+                          ))}
+                      </>
+                    )}
+
+                    {/* SubDL external subtitles section */}
+                    <div className="px-4 pt-3 pb-1 border-t border-white/5">
+                      <div className="text-xs text-gray-400">External Subtitles (SubDL)</div>
+                      {((localStorage.getItem('subdl_apiKey') || '').length === 0) && (
+                        <div className="text-xs text-gray-500 mt-1">
+                          To download subtitles, set a SubDL key in Settings.
+                        </div>
+                      )}
+                    </div>
 
                     <div className="px-4 py-3 border-b border-white/5 flex items-center gap-2">
                       <button
@@ -3608,10 +3903,10 @@ export function Player({ id: playerId, isCollapsed: isCollapsedProp }: { id?: st
             )}
 
             {/* Audio track selector */}
-            {selectedSource && selectedSource.MediaStreams.filter(s => s.Type === 'Audio').length > 1 && (
+            {selectedSource && selectedSource.MediaStreams.filter(s => s.Type === 'Audio').length >= 1 && (
               <div className="relative" role="listitem">
                 <button
-                  onClick={() => { setShowAudioMenu(!showAudioMenu); setShowSubtitleMenu(false); setShowFilterMenu(false); }}
+                  onClick={() => { setShowAudioMenu(!showAudioMenu); setShowSubtitleMenu(false); setShowFilterMenu(false); setShowSharpnessMenu(false); }}
                   className="player-control px-4 py-2.5 bg-black/60 hover:bg-black/80 text-white text-sm rounded-full transition-all duration-200 backdrop-blur-md border border-white/10 hover:border-white/20 hover:scale-105 active:scale-95 flex items-center gap-2"
                   tabIndex={0}
                 >

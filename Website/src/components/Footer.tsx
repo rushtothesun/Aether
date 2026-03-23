@@ -1,64 +1,10 @@
-import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { usePlayerUi } from '../context/PlayerUiContext';
 
 export function Footer() {
   const location = useLocation();
   const isPlayerPage = location.pathname.startsWith('/player');
-  const isSettingsPage = location.pathname === '/settings';
-  const { isCollapsed, activeId } = usePlayerUi();
-  const isMiniPlayerOpen = Boolean(activeId) && isCollapsed;
-  const isPlayerOpen = Boolean(activeId);
 
-  useEffect(() => {
-    // Don't load Ko-fi widget on player page or when player is open
-    if (isPlayerPage || isSettingsPage || isMiniPlayerOpen || isPlayerOpen) {
-      const kofiWidget = document.querySelector('.floatingchat-container-wrap');
-      if (kofiWidget) {
-        kofiWidget.remove();
-      }
-      return;
-    }
-
-    const drawKofi = () => {
-      if (window.kofiWidgetOverlay) {
-        window.kofiWidgetOverlay.draw('danielvnz', {
-          'type': 'floating-chat',
-          'floating-chat.donateButton.text': 'Support Me',
-          'floating-chat.donateButton.background-color': '#00b9fe',
-          'floating-chat.donateButton.text-color': '#fff',
-          'floating-chat.donateButton.position': 'right'
-        });
-      }
-    };
-
-    const existingScript = document.querySelector('script[data-kofi-widget="overlay"]') as HTMLScriptElement | null;
-    if (existingScript) {
-      drawKofi();
-      return () => {
-        const kofiWidget = document.querySelector('.floatingchat-container-wrap');
-        if (kofiWidget) {
-          kofiWidget.remove();
-        }
-      };
-    }
-
-    // Load Ko-fi widget script once
-    const script = document.createElement('script');
-    script.src = 'https://storage.ko-fi.com/cdn/scripts/overlay-widget.js';
-    script.async = true;
-    script.dataset.kofiWidget = 'overlay';
-    script.onload = drawKofi;
-    document.body.appendChild(script);
-
-    return () => {
-      // Remove Ko-fi widget elements
-      const kofiWidget = document.querySelector('.floatingchat-container-wrap');
-      if (kofiWidget) {
-        kofiWidget.remove();
-      }
-    };
-  }, [isMiniPlayerOpen, isPlayerOpen, isPlayerPage, isSettingsPage]);
+  if (isPlayerPage) return null;
 
   return (
     <footer className="relative z-10 border-t border-white/5 mt-16 py-8 px-8">
@@ -70,10 +16,7 @@ export function Footer() {
               Not affiliated with Emby or TMDB.
             </p>
           </div>
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-600">
-            <p className="text-center sm:text-left">
-              Support me if you'd like to keep this project alive!
-            </p>
+          <div className="flex items-center justify-end text-xs text-gray-600">
             <a
               href="https://github.com/DanielVNZ/Aether"
               target="_blank"
@@ -90,12 +33,4 @@ export function Footer() {
       </div>
     </footer>
   );
-}
-
-declare global {
-  interface Window {
-    kofiWidgetOverlay: {
-      draw: (username: string, options: Record<string, string>) => void;
-    };
-  }
 }

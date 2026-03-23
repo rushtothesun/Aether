@@ -3,9 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { authService } from './services/auth';
 import { embyApi } from './services/embyApi';
 import { AppFallbackSkeleton } from './components/AppFallbackSkeleton';
-import { UpdateBanner } from './components/UpdateBanner';
-import { ConsentBanner } from './components/ConsentBanner';
-import { initAnalytics, trackAppOpen } from './services/analytics';
 import { PlayerUiProvider } from './context/PlayerUiContext';
 import { PlayerHost } from './components/PlayerHost';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -34,8 +31,6 @@ function AppRoutes() {
   return (
     <>
       <div id="app-shell">
-        <UpdateBanner />
-        <ConsentBanner />
         <Suspense fallback={<AppFallbackSkeleton />}>
           <Routes location={backgroundLocation ?? location}>
           <Route path="/login" element={<Login />} />
@@ -128,9 +123,11 @@ function App() {
     if (storedAuth) {
       embyApi.setCredentials(storedAuth);
     }
-    void initAnalytics().then(() => trackAppOpen());
     if (isTauri()) {
-      void invoke('close_splashscreen').catch(() => {});
+      // Add a small delay to ensure the splash screen webview is fully registered in the backend
+      setTimeout(() => {
+        void invoke('close_splashscreen').catch((err) => console.error('Failed to close splash:', err));
+      }, 500);
     }
   }, []);
 

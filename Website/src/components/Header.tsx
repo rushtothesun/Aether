@@ -15,6 +15,15 @@ export function Header({ transparent = false }: HeaderProps) {
   const { logout } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [currentPageName, setCurrentPageName] = useState<string | null>(null);
+  const [userViews, setUserViews] = useState<EmbyItem[]>([]);
+  const [isLibraryDropdownOpen, setIsLibraryDropdownOpen] = useState(false);
+
+  // Fetch library categories
+  useEffect(() => {
+    embyApi.getUserViews()
+      .then((res) => setUserViews(res.Items || []))
+      .catch(() => {});
+  }, []);
 
   // Determine current page name
   useEffect(() => {
@@ -35,12 +44,22 @@ export function Header({ transparent = false }: HeaderProps) {
     } else if (path === '/home') {
       setCurrentPageName('Home');
     } else if (path === '/browse') {
-      if (location.search.includes('type=Series')) {
+      const parentId = new URLSearchParams(location.search).get('parentId');
+      if (parentId) {
+        embyApi.getItem(parentId)
+          .then((item: EmbyItem) => {
+            setCurrentPageName(item.Name || 'Browse');
+          })
+          .catch(() => {
+            setCurrentPageName(location.search.includes('type=Series') ? 'TV Shows' : 'Movies');
+          });
+      } else if (location.search.includes('type=Series')) {
         setCurrentPageName('TV Shows');
       } else {
         setCurrentPageName('Movies');
       }
     } else if (path === '/mylist') {
+
       setCurrentPageName('Favourites');
     } else if (path === '/stats') {
       setCurrentPageName('Stats');
@@ -102,32 +121,46 @@ export function Header({ transparent = false }: HeaderProps) {
   <span className="hidden lg:inline text-sm font-medium">Search</span>
 </button>
 
-            {currentPageName !== 'Movies' && (
-            <button
-              onClick={() => navigate('/browse')}
-              className="flex items-center gap-2 text-white hover:text-gray-300 transition-all duration-200 hover:scale-110 p-2 rounded-full hover:bg-white/10"
-              aria-label="Movies"
-              title="Movies"
-            >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
-              </svg>
-              <span className="hidden lg:inline text-sm font-medium">Movies</span>
-            </button>
-            )}
-            {currentPageName !== 'TV Shows' && (
-            <button
-              onClick={() => navigate('/browse?type=Series')}
-              className="flex items-center gap-2 text-white hover:text-gray-300 transition-all duration-200 hover:scale-110 p-2 rounded-full hover:bg-white/10"
-              aria-label="TV Shows"
-              title="TV Shows"
-            >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-              <span className="hidden lg:inline text-sm font-medium">TV Shows</span>
-            </button>
-            )}
+            {/* Library Categories Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setIsLibraryDropdownOpen(!isLibraryDropdownOpen)}
+                onBlur={() => setTimeout(() => setIsLibraryDropdownOpen(false), 150)}
+                className="flex items-center gap-2 text-white hover:text-gray-300 transition-all duration-200 hover:scale-110 p-2 rounded-full hover:bg-white/10"
+                aria-label="Libraries"
+                title="Libraries"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
+                </svg>
+                <span className="hidden lg:inline text-sm font-medium">Libraries</span>
+                <svg className={`w-4 h-4 hidden lg:inline transition-transform ${isLibraryDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {isLibraryDropdownOpen && userViews.length > 0 && (
+                <div className="absolute top-full right-0 mt-2 bg-gray-900/95 backdrop-blur-sm border border-white/10 rounded-xl shadow-2xl shadow-black/60 py-2 min-w-[180px] z-50">
+                  {userViews.map((view) => {
+                    const type = view.CollectionType === 'tvshows' ? 'Series' : view.CollectionType === 'boxsets' ? 'BoxSet' : 'Movie';
+                    const href = view.CollectionType === 'boxsets'
+                      ? `/browse?type=BoxSet&parentId=${view.Id}`
+                      : `/browse?type=${type}&parentId=${view.Id}`;
+                    return (
+                      <button
+                        key={view.Id}
+                        onClick={() => {
+                          setIsLibraryDropdownOpen(false);
+                          navigate(href);
+                        }}
+                        className="w-full text-left px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors flex items-center gap-3"
+                      >
+                        {view.Name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             {currentPageName !== 'Favourites' && (
             <button
               onClick={() => navigate('/mylist')}

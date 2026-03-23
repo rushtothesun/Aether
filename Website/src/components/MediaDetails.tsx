@@ -387,21 +387,23 @@ export function MediaDetails() {
     }
   };
 
-  const handlePlay = useCallback(async (itemToPlay?: EmbyItem) => {
+  const handlePlay = useCallback(async (itemToPlay?: EmbyItem, fromBeginning?: boolean) => {
     const playItem = itemToPlay || item;
     if (!playItem) return;
 
     // For series, play first unwatched episode or first episode
     if (playItem.Type === 'Series') {
-      const firstEpisode = allEpisodes.find(ep => !ep.UserData?.Played) || allEpisodes[0] || episodes[0];
+      const firstEpisode = fromBeginning
+        ? (allEpisodes[0] || episodes[0])
+        : (allEpisodes.find(ep => !ep.UserData?.Played) || allEpisodes[0] || episodes[0]);
       if (firstEpisode) {
-        navigate(`/player/${firstEpisode.Id}`, { state: { backgroundLocation: location } });
+        navigate(`/player/${firstEpisode.Id}`, { state: { backgroundLocation: location, startFromBeginning: !!fromBeginning } });
       }
       return;
     }
 
     // For movies/episodes, play directly
-    navigate(`/player/${playItem.Id}`, { state: { backgroundLocation: location } });
+    navigate(`/player/${playItem.Id}`, { state: { backgroundLocation: location, startFromBeginning: !!fromBeginning } });
   }, [allEpisodes, episodes, item, location, navigate]);
 
   const handleContinueWatching = useCallback(() => {
@@ -710,7 +712,7 @@ export function MediaDetails() {
               {/* Play from Beginning for movies with progress */}
               {!!item?.UserData?.PlaybackPositionTicks && item?.Type !== 'Series' && (
                 <button
-                  onClick={() => handlePlay()}
+                  onClick={() => handlePlay(undefined, true)}
                   className="px-8 py-3 bg-white/10 text-white font-bold text-base rounded-xl hover:bg-white/20 hover:scale-105 transition-all duration-300 backdrop-blur-sm border-2 border-white/20 hover:border-white/30 shadow-lg"
                 >
                   Play from Beginning
@@ -720,7 +722,7 @@ export function MediaDetails() {
               {/* Play from Beginning for series with continue watching */}
               {continueWatchingEpisode && item?.Type === 'Series' && (
                 <button
-                  onClick={() => handlePlay()}
+                  onClick={() => handlePlay(undefined, true)}
                   className="px-8 py-3 bg-white/10 text-white font-bold text-base rounded-xl hover:bg-white/20 hover:scale-105 transition-all duration-300 backdrop-blur-sm border-2 border-white/20 hover:border-white/30 shadow-lg"
                 >
                   Play from Beginning

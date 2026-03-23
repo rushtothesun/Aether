@@ -1,7 +1,16 @@
 use tauri::Manager;
+use std::env;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // Make the app portable: store WebView2 data next to the executable
+  if let Ok(exe_path) = env::current_exe() {
+    if let Some(exe_dir) = exe_path.parent() {
+      let data_dir = exe_dir.join("Aether_Data");
+      env::set_var("WEBVIEW2_USER_DATA_FOLDER", data_dir);
+    }
+  }
+
   tauri::Builder::default()
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_updater::Builder::new().build())

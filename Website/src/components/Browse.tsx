@@ -215,7 +215,7 @@ function MultiSelect({
       </button>
       
       {isOpen && (
-        <div role="menu" className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+        <div role="menu" className="absolute z-[100] w-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl max-h-60 overflow-y-auto">
           {selected.length > 0 && (
             <button
               onClick={() => onChange([])}
@@ -295,7 +295,7 @@ function SingleSelect({
         </svg>
       </button>
       {isOpen && (
-        <div role="menu" className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+        <div role="menu" className="absolute z-[100] w-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl max-h-60 overflow-y-auto">
           {options.map(({ v, l }) => (
             <button
               key={v}
@@ -323,8 +323,11 @@ export function Browse() {
   const [searchParams] = useSearchParams();
 
   const mediaType = searchParams.get('type') || 'Movie'; // 'Movie' or 'Series'
+  const parentId = searchParams.get('parentId');
+
   
   const [items, setItems] = useState<EmbyItem[]>([]);
+  const [parentItem, setParentItem] = useState<EmbyItem | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isInlineLoading, setIsInlineLoading] = useState(false);
@@ -343,7 +346,16 @@ export function Browse() {
     seasonCounts: [],
   };
 
-  const [filters, setFilters] = useState<FilterState>({ ...DEFAULT_FILTERS });
+  const [filters, setFilters] = useState<FilterState>(() => {
+    try {
+      const raw = localStorage.getItem(`lastFilter_${mediaType}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.filters) return { ...DEFAULT_FILTERS, ...parsed.filters };
+      }
+    } catch { /* ignore */ }
+    return { ...DEFAULT_FILTERS };
+  });
   // Filters are always visible in the redesigned UI
 
   // Saved filter shortcuts (persisted separately per media type)
@@ -361,7 +373,7 @@ export function Browse() {
 
   const storageKey = (mt: string) => `savedFilters_${mt}`;  
 
-  // load saved filters when media type changes
+  // load saved filters and last-used filter when media type changes
   useEffect(() => {
     try {
       const raw = localStorage.getItem(storageKey(mediaType));
@@ -374,6 +386,18 @@ export function Browse() {
       console.error('Failed to load saved filters:', e);
       setSavedFilters([]);
     }
+    // Restore last-used filter for this media type
+    try {
+      const lastRaw = localStorage.getItem(`lastFilter_${mediaType}`);
+      if (lastRaw) {
+        const parsed = JSON.parse(lastRaw);
+        if (parsed?.filters) {
+          setFilters({ ...DEFAULT_FILTERS, ...parsed.filters });
+          return;
+        }
+      }
+    } catch { /* ignore */ }
+    setFilters({ ...DEFAULT_FILTERS });
   }, [mediaType]);
 
   const persistSavedFilters = (list: SavedFilter[]) => {
@@ -385,13 +409,23 @@ export function Browse() {
     }
   };
 
+  const sortByDisplayName: Record<string, string> = {
+    PremiereDate: 'Release Date',
+    SortName: 'Name',
+    DateCreated: 'Date Added',
+    CommunityRating: 'Rating',
+    LastContentPremiereDate: 'Last Episode Released',
+    DateLastContentAdded: 'Last Episode Added',
+  };
+
   const generateFilterName = (f: FilterState, term: string) => {
     const parts: string[] = [];
     if (term.trim()) parts.push(`"${term.trim()}"`);
     if (f.genres.length) parts.push(`Genres: ${f.genres.slice(0,3).join(', ')}`);
     if (f.years.length) parts.push(`Years: ${f.years.slice(0,3).join(', ')}`);
     if (f.seasonCounts.length) parts.push(`Seasons: ${f.seasonCounts.slice(0,3).join(', ')}`);
-    parts.push(`Sort: ${f.sortBy} ${f.sortOrder === 'Descending' ? 'Desc' : 'Asc'}`);
+    const sortName = sortByDisplayName[f.sortBy] || f.sortBy;
+    parts.push(`Sort: ${sortName} ${f.sortOrder === 'Descending' ? 'Desc' : 'Asc'}`);
     return parts.join(' · ');
   };
 
@@ -424,6 +458,10 @@ export function Browse() {
     setFilters({ ...sf.filters });
     setSearchTerm(sf.searchTerm || '');
     setCurrentPage(1);
+    // Remember as default for this media type
+    try {
+      localStorage.setItem(`lastFilter_${mediaType}`, JSON.stringify({ filters: sf.filters, searchTerm: sf.searchTerm || '' }));
+    } catch { /* ignore */ }
     // trigger load
     setTimeout(() => loadItems('filters'), 0);
   };
@@ -566,7 +604,7 @@ export function Browse() {
     } catch (e) {
       // ignore
     }
-  }, [mediaType]);
+  }, [mediaType, parentId]);
 
   const applyFilters = () => {
     setCurrentPage(1);
@@ -574,6 +612,22 @@ export function Browse() {
   };
 
   // Debounce search typing (inline loading, no full-screen)
+  useEffect(() => {
+    const loadParentItem = async () => {
+      if (!parentId) {
+        setParentItem(null);
+        return;
+      }
+      try {
+        const item = await embyApi.getItem(parentId);
+        setParentItem(item);
+      } catch (e) {
+        console.error('Failed to load parent item info:', e);
+      }
+    };
+    loadParentItem();
+  }, [parentId]);
+
   useEffect(() => {
     const handle = setTimeout(() => {
       setCurrentPage(1);
@@ -605,11 +659,13 @@ export function Browse() {
           sortOrder: filters.sortOrder,
           // Ensure necessary fields are present (include UserData so favorite state is available)
           fields: isSeries
-            ? 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,Studios,ChildCount,SeasonCount,ProviderIds,Path,MediaSources,UserData'
+            ? 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,Studios,ChildCount,SeasonCount,ProviderIds,Path,MediaSources,UserData,LastContentPremiereDate,DateLastContentAdded'
             : 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,Studios,ProviderIds,Path,MediaSources,UserData',
         };
         if (filters.genres.length > 0) baseParams.genres = filters.genres.join(',');
+        if (parentId) baseParams.parentId = parentId;
         // Do NOT pass years when using 'Before 1980' because API doesn't support ranges; we'll filter client-side.
+
         if (!needsClientYearFilter && selectedYears.length > 0) baseParams.years = selectedYears.join(',');
         if (searchTerm.trim().length > 0) baseParams.searchTerm = searchTerm.trim();
 
@@ -673,12 +729,14 @@ export function Browse() {
           startIndex: (currentPage - 1) * itemsPerPage,
           // Ensure season-related fields are included for Series (include UserData)
           fields: mediaType === 'Series'
-            ? 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,Studios,ChildCount,SeasonCount,ProviderIds,Path,MediaSources,UserData'
+            ? 'Genres,Overview,CommunityRating,OfficialRating,RunTimeTicks,ProductionYear,PremiereDate,Studios,ChildCount,SeasonCount,ProviderIds,Path,MediaSources,UserData,LastContentPremiereDate,DateLastContentAdded'
             : undefined,
         };
 
         if (filters.genres.length > 0) params.genres = filters.genres.join(',');
+        if (parentId) params.parentId = parentId;
         const selectedYearsSimple = filters.years.filter((y): y is number => typeof y === 'number');
+
         if (selectedYearsSimple.length > 0) params.years = selectedYearsSimple.join(',');
         if (searchTerm.trim().length > 0) params.searchTerm = searchTerm.trim();
 
@@ -719,7 +777,11 @@ export function Browse() {
   };
 
   const handleItemClick = (item: EmbyItem) => {
-    navigate(`/details/${item.Id}`, { state: { mediaType: item.Type } });
+    if (item.Type === 'BoxSet') {
+      navigate(`/library/${item.Id}`);
+    } else {
+      navigate(`/details/${item.Id}`, { state: { mediaType: item.Type } });
+    }
   };
 
   // Client-side refinement (on top of server-side filtering)
@@ -893,8 +955,14 @@ export function Browse() {
                     { v: 'PremiereDate', l: 'Release' },
                     { v: 'SortName', l: 'Name' },
                     { v: 'DateCreated', l: 'Added' },
-                    { v: 'CommunityRating', l: 'Rating' },
-                    { v: 'Runtime', l: 'Runtime' },
+                    ...(mediaType === 'Series' && parentItem?.CollectionType !== 'boxsets' ? [
+                      { v: 'LastContentPremiereDate', l: 'Last Episode Released' },
+                      { v: 'DateLastContentAdded', l: 'Last Episode Added' },
+                    ] : []),
+                    ...(parentItem?.CollectionType !== 'boxsets' ? [
+                      { v: 'CommunityRating', l: 'Rating' },
+                      { v: 'Runtime', l: 'Runtime' },
+                    ] : []),
                   ]}
                   value={filters.sortBy}
                   onChange={(v) => setFilters({ ...filters, sortBy: v })}

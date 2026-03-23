@@ -2,14 +2,10 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { embyApi } from '../services/embyApi';
 import { useAuth } from '../hooks/useAuth';
-import { check, type DownloadEvent } from '@tauri-apps/plugin-updater';
-import { isTauri } from '@tauri-apps/api/core';
-import { relaunch } from '@tauri-apps/plugin-process';
-import { getConsent, setConsent, type ConsentValue } from '../services/analytics';
 import { Header } from './Header';
 import { Footer } from './Footer';
 
-type SettingsSection = 'home' | 'playback' | 'account' | 'updates';
+type SettingsSection = 'home' | 'playback' | 'account';
 
 const HOME_SECTIONS_KEY = 'home_customSections';
 const DEFAULT_HOME_SECTIONS = [
@@ -27,7 +23,6 @@ const DEFAULT_HOME_SECTIONS = [
 const SETTINGS_SECTIONS = [
   { id: 'home' as const, label: 'Home Screen', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
   { id: 'playback' as const, label: 'Playback', icon: 'M8 5v14l11-7z' },
-  { id: 'updates' as const, label: 'Updates & Analytics', icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' },
   { id: 'account' as const, label: 'Account & Backup', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z' },
 ];
 
@@ -66,6 +61,12 @@ export function Settings() {
   });
   const [playbackQuality, setPlaybackQuality] = useState<string>(() => {
     return localStorage.getItem('emby_playbackQuality') || 'manual';
+  });
+  const [bufferMinutes, setBufferMinutes] = useState<string>(() => {
+    return localStorage.getItem('emby_bufferMinutes') || '30';
+  });
+  const [bufferRamMax, setBufferRamMax] = useState<string>(() => {
+    return localStorage.getItem('emby_bufferRamMax') || '500';
   });
   const [preferredAudioLang, setPreferredAudioLang] = useState<string>(() => {
     return localStorage.getItem('emby_preferredAudioLang') || '';
@@ -226,119 +227,7 @@ export function Settings() {
   };
 
   // Update checker state
-  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [updateVersion, setUpdateVersion] = useState<string>('');
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [updateError, setUpdateError] = useState<string | null>(null);
-  const [hasCheckedForUpdates, setHasCheckedForUpdates] = useState(false);
   const [currentVersion] = useState('3.0.12');
-  const [analyticsConsent, setAnalyticsConsent] = useState<ConsentValue | 'unset'>(
-    () => getConsent() ?? 'unset'
-  );
-
-  const safeCheckForUpdates = async () => {
-    if (!isTauri()) {
-      return { update: null as Awaited<ReturnType<typeof check>> | null, error: 'Updates are only available in the desktop app.' };
-    }
-    try {
-      const update = await check();
-      return { update, error: null as string | null };
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      if (errorMessage.includes("reading 'available'")) {
-        return {
-          update: null,
-          error: 'Updater returned no data. Verify updater permissions and endpoint.',
-        };
-      }
-      return { update: null, error: errorMessage };
-    }
-  };
-
-  const checkForUpdates = async () => {
-    try {
-      setIsCheckingUpdate(true);
-      setUpdateError(null);
-      setHasCheckedForUpdates(false);
-      
-      const { update, error } = await safeCheckForUpdates();
-      
-      if (error) {
-        setUpdateAvailable(false);
-        setUpdateVersion('');
-        setUpdateError(`Failed to check for updates: ${error}`);
-      } else if (update) {
-        console.log(`Update available: ${update.version}, current: ${update.currentVersion}`);
-        setUpdateAvailable(true);
-        setUpdateVersion(update.version);
-      } else {
-        setUpdateAvailable(false);
-        setUpdateVersion('');
-      }
-      setHasCheckedForUpdates(true);
-    } catch (err) {
-      console.error('Error checking for updates:', err);
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setUpdateError(`Failed to check for updates: ${errorMessage}`);
-    } finally {
-      setIsCheckingUpdate(false);
-    }
-  };
-
-  const downloadAndInstallUpdate = async () => {
-    try {
-      setIsDownloading(true);
-      setUpdateError(null);
-      
-      const { update, error } = await safeCheckForUpdates();
-      
-      if (error) {
-        setUpdateError(`Update failed: ${error}`);
-        setIsDownloading(false);
-        return;
-      }
-
-      if (!update) {
-        setUpdateError('No update found. Please check for updates first.');
-        setIsDownloading(false);
-        return;
-      }
-      
-      console.log('Starting download from:', update);
-      
-      let bytesDownloaded = 0;
-      await update.downloadAndInstall((event: DownloadEvent) => {
-        console.log('Update event:', event);
-        switch (event.event) {
-          case 'Started':
-            bytesDownloaded = 0;
-            setDownloadProgress(0);
-            console.log('Download started');
-            break;
-          case 'Progress':
-            bytesDownloaded += event.data?.chunkLength ?? 0;
-            const animatedProgress = Math.min(90, (bytesDownloaded / (1024 * 1024 * 50)) * 100);
-            setDownloadProgress(animatedProgress);
-            console.log(`Downloaded: ${(bytesDownloaded / 1024 / 1024).toFixed(2)} MB`);
-            break;
-          case 'Finished':
-            setDownloadProgress(100);
-            console.log('Download complete');
-            break;
-        }
-      });
-
-      console.log('Installing update and relaunching...');
-      await relaunch();
-    } catch (err) {
-      console.error('Error downloading update:', err);
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setUpdateError(`Update failed: ${errorMessage}`);
-      setIsDownloading(false);
-    }
-  };
 
   return (
     <div className="min-h-screen h-screen bg-black flex flex-col overflow-hidden">
@@ -372,21 +261,6 @@ export function Settings() {
           ))}
         </nav>
 
-        <div className="px-4 pb-4">
-          <a
-            href="https://ko-fi.com/danielvnz"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="w-full inline-flex items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-3 text-white font-semibold shadow-lg shadow-sky-500/30 transition-all duration-200 hover:scale-105"
-          >
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/20">
-              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M12 21s-6.716-4.245-9.236-7.236C1.212 12.212 1 10.975 1 10a6 6 0 0112 0h-2a4 4 0 00-8 0c0 .511.116 1.171 1.264 2.468C5.823 14.356 8.82 16.36 12 18.36c3.18-2 6.177-4.004 7.736-5.892C20.884 11.171 21 10.511 21 10a4 4 0 00-8 0h-2a6 6 0 0112 0c0 .975-.212 2.212-1.764 3.764C18.716 16.755 12 21 12 21z" />
-              </svg>
-            </span>
-            Support Me on Ko-fi
-          </a>
-        </div>
 
         <div className="p-4 border-t border-gray-800/50">
           <button
@@ -719,6 +593,48 @@ export function Settings() {
                 </div>
               </div>
 
+              <div className="bg-gray-900/50 rounded-xl border border-gray-800/70 overflow-hidden backdrop-blur-sm xl:col-span-2">
+                <div className="p-6">
+                  <label className="block text-white font-semibold text-lg mb-2">Video Buffering & Storage Limits</label>
+                  <p className="text-sm text-gray-400 mb-5">Control how much video Aether caches ahead of your current position</p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Max Forward Buffer (Minutes)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="120"
+                        value={bufferMinutes}
+                        onChange={(e) => {
+                          setBufferMinutes(e.target.value);
+                          localStorage.setItem('emby_bufferMinutes', e.target.value);
+                        }}
+                        className="w-full px-4 py-3 bg-gray-800/70 border border-gray-700 rounded-xl text-white hover:bg-gray-800 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all font-mono"
+                      />
+                      <p className="text-xs text-gray-500 mt-2">How far ahead to buffer. Higher values mean better protection against network drops. Default: 30</p>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Maximum Buffer RAM (MB)</label>
+                      <input
+                        type="number"
+                        min="50"
+                        max="8000"
+                        step="50"
+                        value={bufferRamMax}
+                        onChange={(e) => {
+                          setBufferRamMax(e.target.value);
+                          localStorage.setItem('emby_bufferRamMax', e.target.value);
+                        }}
+                        className="w-full px-4 py-3 bg-gray-800/70 border border-gray-700 rounded-xl text-white hover:bg-gray-800 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all font-mono"
+                      />
+                      <p className="text-xs text-gray-500 mt-2">Hard limit on RAM usage. The buffer stops automatically if this is reached, saving bandwidth. Default: 500</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div className="bg-gray-900/50 rounded-xl border border-gray-800/70 overflow-hidden backdrop-blur-sm">
                 <div className="p-6">
                   <label className="block text-white font-semibold text-lg mb-2">Default Audio Language</label>
@@ -848,126 +764,7 @@ export function Settings() {
             </div>
           )}
 
-          {/* Updates Section */}
-          {activeSection === 'updates' && (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-3xl font-bold text-white">Updates</h2>
-                <p className="text-gray-400 mt-2">Check for and install app updates</p>
-              </div>
 
-              {/* Current Version */}
-              <div className="bg-gray-900/50 rounded-xl border border-gray-800/70 overflow-hidden backdrop-blur-sm">
-                <div className="p-6">
-                  <p className="text-white font-semibold text-lg mb-2">Current Version</p>
-                  <p className="text-3xl font-bold text-blue-400 mb-1">{currentVersion}</p>
-                  <p className="text-sm text-gray-400">Aether Media Player</p>
-                </div>
-              </div>
-
-              {/* Analytics Consent */}
-              <div className="bg-gray-900/50 rounded-xl border border-gray-800/70 overflow-hidden backdrop-blur-sm">
-                <div className="p-6 flex items-center justify-between">
-                  <div className="flex-1">
-                    <p className="text-white font-semibold text-lg">Analytics</p>
-                    <p className="text-sm text-gray-400 mt-1">
-                      Allow anonymous usage tracking for user count only.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      const next = analyticsConsent === 'granted' ? 'denied' : 'granted';
-                      setAnalyticsConsent(next);
-                      void setConsent(next);
-                    }}
-                    role="switch"
-                    aria-checked={analyticsConsent === 'granted'}
-                    className={`relative w-16 h-9 rounded-full transition-all duration-300 flex-shrink-0 hover:scale-105 ml-6 ${
-                      analyticsConsent === 'granted' ? 'bg-blue-600' : 'bg-gray-700'
-                    }`}
-                  >
-                    <div className={`absolute top-1.5 w-6 h-6 bg-white rounded-full shadow-lg transition-transform duration-300 ${
-                      analyticsConsent === 'granted' ? 'translate-x-8' : 'translate-x-1.5'
-                    }`} />
-                  </button>
-                </div>
-                <div className="px-6 pb-5 text-xs text-gray-500">
-                  You can change this anytime. Disabling stops future tracking immediately.
-                </div>
-              </div>
-
-              {/* Check for Updates */}
-              <div className="bg-gray-900/50 rounded-xl border border-gray-800/70 overflow-hidden backdrop-blur-sm">
-                <div className="p-6">
-                  <p className="text-white font-semibold text-lg mb-2">Check for Updates</p>
-                  <p className="text-sm text-gray-400 mb-5">Manually check for new versions from GitHub</p>
-                  
-                  {updateError && (
-                    <div className="mb-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
-                      <p className="text-red-400 text-sm">{updateError}</p>
-                    </div>
-                  )}
-
-                  {updateAvailable && !isDownloading && (
-                    <div className="mb-4 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-                      <p className="text-blue-400 font-semibold mb-1">Update Available!</p>
-                      <p className="text-blue-300 text-sm">Version {updateVersion} is ready to install</p>
-                    </div>
-                  )}
-
-                  {!hasCheckedForUpdates && !isCheckingUpdate && !updateError && (
-                    <div className="mb-4 p-4 bg-gray-800/50 border border-gray-700/50 rounded-lg">
-                      <p className="text-gray-400 text-sm">Click the button below to check for updates</p>
-                    </div>
-                  )}
-
-                  {hasCheckedForUpdates && !updateAvailable && !isCheckingUpdate && !updateError && (
-                    <div className="mb-4 p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
-                      <p className="text-green-400 text-sm">You're running the latest version</p>
-                    </div>
-                  )}
-
-                  {isDownloading && (
-                    <div className="mb-4">
-                      <p className="text-white text-sm mb-2">Downloading update...</p>
-                      <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-blue-500 transition-all duration-300"
-                          style={{ width: `${downloadProgress}%` }}
-                        />
-                      </div>
-                      <p className="text-gray-400 text-xs mt-1">{downloadProgress.toFixed(0)}%</p>
-                    </div>
-                  )}
-                  
-                  <div className="flex gap-3">
-                    <button
-                      onClick={checkForUpdates}
-                      disabled={isCheckingUpdate || isDownloading}
-                      className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white font-semibold rounded-xl transition-all duration-200 hover:scale-105 disabled:scale-100 disabled:cursor-not-allowed flex items-center gap-3"
-                    >
-                      <svg className={`w-5 h-5 ${isCheckingUpdate ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                      {isCheckingUpdate ? 'Checking...' : 'Check for Updates'}
-                    </button>
-
-                    {updateAvailable && !isDownloading && (
-                      <button
-                        onClick={downloadAndInstallUpdate}
-                        className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-xl transition-all duration-200 hover:scale-105 flex items-center gap-3"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        </svg>
-                        Install Update
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
           {activeSection === 'account' && (
             <div className="space-y-6">
